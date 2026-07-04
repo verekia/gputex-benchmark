@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gputex vs spark — visual quality compare</title>
+<style>
+  :root { --bg:#171717; --panel:#1f1f1f; --line:#333; --muted:#9aa0a6; --text:#e8eaed;
+          --gputex:#34d399; --spark:#f5c518; --accent:#3b82f6; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+               font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  #app { display:flex; height:100vh; }
+
+  /* ---- sidebar ---- */
+  #sidebar { width:320px; flex:0 0 320px; background:var(--panel); border-right:1px solid var(--line);
+             padding:16px; overflow-y:auto; display:flex; flex-direction:column; gap:16px; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  h1 small { display:block; color:var(--muted); font-weight:400; font-size:11px; margin-top:2px; }
+  .group { display:flex; flex-direction:column; gap:6px; }
+  .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .formats { display:flex; flex-wrap:wrap; gap:6px; }
+  .fmt { padding:5px 10px; border:1px solid var(--line); border-radius:6px; background:transparent;
+         color:var(--text); cursor:pointer; font-size:12px; }
+  .fmt.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .fmt:disabled { opacity:.35; cursor:not-allowed; }
+  select { width:100%; padding:7px 8px; background:#141414; color:var(--text);
+           border:1px solid var(--line); border-radius:6px; font-size:12px; }
+
+  /* ---- the big gputex/spark toggle ---- */
+  #libToggle { padding:14px; border:none; border-radius:8px; cursor:pointer; font-size:15px;
+               font-weight:700; letter-spacing:.02em; color:#0b0b0b; transition:background .12s; }
+  #libToggle[data-lib="gputex"] { background:var(--gputex); }
+  #libToggle[data-lib="spark"]  { background:var(--spark); }
+  #libToggle small { display:block; font-weight:500; font-size:10px; opacity:.75; margin-top:2px; }
+
+  .controls { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .controls label { display:flex; gap:6px; align-items:center; color:var(--muted); cursor:pointer; }
+  button.ghost { padding:5px 9px; border:1px solid var(--line); border-radius:6px; background:transparent;
+                 color:var(--text); cursor:pointer; font-size:12px; }
+
+  /* ---- benchmark results ---- */
+  .bench { border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .bench .head { background:#141414; padding:6px 10px; font-size:11px; color:var(--muted);
+                 text-transform:uppercase; letter-spacing:.04em; }
+  .bench table { width:100%; border-collapse:collapse; }
+  .bench td { padding:6px 10px; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .bench td.k { color:var(--muted); }
+  .bench td.v { text-align:right; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  .win-g { color:var(--gputex); } .win-s { color:var(--spark); } .win-t { color:var(--muted); }
+  .note { color:var(--muted); font-size:11px; }
+  .err { color:#f87171; font-size:12px; white-space:pre-wrap; }
+
+  /* ---- viewport / plane ---- */
+  #stage { flex:1; position:relative; overflow:hidden; background:
+           repeating-conic-gradient(#2a2a2a 0% 25%, #202020 0% 50%) 50% / 24px 24px; cursor:grab; }
+  #stage.grabbing { cursor:grabbing; }
+  #view { position:absolute; top:0; left:0; transform-origin:0 0; image-rendering:auto; }
+  #view.pixelated { image-rendering:pixelated; }
+  /* corner badge showing which library is on screen */
+  #badge { position:absolute; top:12px; left:12px; padding:5px 12px; border-radius:6px;
+           font-weight:700; font-size:13px; color:#0b0b0b; pointer-events:none; }
+  #badge[data-lib="gputex"] { background:var(--gputex); }
+  #badge[data-lib="spark"]  { background:var(--spark); }
+  #badge[data-lib="original"] { background:#e5e7eb; }
+  #hud { position:absolute; bottom:12px; left:12px; color:var(--muted); font-size:11px;
+         background:rgba(0,0,0,.4); padding:4px 8px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>gputex vs spark<small>visual quality compare (local)</small></h1>
+
+    <div class="group">
+      <span class="label">Format</span>
+      <div class="formats" id="formats"></div>
+    </div>
+
+    <div class="group">
+      <span class="label">Texture</span>
+      <select id="texture"></select>
+    </div>
+
+    <div class="group">
+      <span class="label">Showing — click to flip</span>
+      <button id="libToggle" data-lib="gputex">gputex<small>click to compare spark</small></button>
+      <div class="controls">
+        <label><input type="checkbox" id="pixelated" /> pixelated</label>
+        <button class="ghost" id="origBtn" title="hold to see the uncompressed source">hold: original</button>
+        <button class="ghost" id="reset">reset view</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="label">Benchmark (from results.json)</span>
+      <div class="bench">
+        <div class="head" id="benchHead">—</div>
+        <table><tbody id="benchBody"></tbody></table>
+      </div>
+      <div class="note" id="liveNote"></div>
+    </div>
+
+    <div class="err" id="error"></div>
+    <div class="note">Scroll to zoom · drag to pan · both sides are encoded live on the GPU and
+      decoded with the same reference decoder, so the flip is a true quality A/B.</div>
+  </aside>
+
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="badge" data-lib="gputex">gputex</div>
+    <div id="hud"></div>
+  </div>
+</div>
+<script type="module" src="compare.js"></script>
+</body>
+</html>

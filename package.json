@@ -1,0 +1,16 @@
+{
+  "name": "gputex-benchmark",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure WebGPU compute-shader performance comparison: gputex vs spark.js",
+  "scripts": {
+    "bench": "node run.mjs",
+    "report": "node report.mjs",
+    "build:refcodec": "bash build-refcodec.sh",
+    "compare": "node serve.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

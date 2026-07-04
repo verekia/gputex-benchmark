@@ -1,0 +1,138 @@
+[
+  {
+    "url": "textures/color.png",
+    "name": "color"
+  },
+  {
+    "url": "textures/normal.png",
+    "name": "normal"
+  },
+  {
+    "url": "textures/packed-materials/packed-materials-1024.png",
+    "name": "packed 1024"
+  },
+  {
+    "url": "textures/packed-materials/packed-materials-2048.png",
+    "name": "packed 2048"
+  },
+  {
+    "url": "textures/packed-materials/packed-materials-256.png",
+    "name": "packed 256"
+  },
+  {
+    "url": "textures/packed-materials/packed-materials-4096.png",
+    "name": "packed 4096"
+  },
+  {
+    "url": "textures/packed-materials/packed-materials-512.png",
+    "name": "packed 512"
+  },
+  {
+    "url": "textures/Rock064_1K-JPG/Rock064_1K-JPG_AmbientOcclusion.jpg",
+    "name": "Rock064 1K AO"
+  },
+  {
+    "url": "textures/Rock064_1K-JPG/Rock064_1K-JPG_Color.jpg",
+    "name": "Rock064 1K Color"
+  },
+  {
+    "url": "textures/Rock064_1K-JPG/Rock064_1K-JPG_Displacement.jpg",
+    "name": "Rock064 1K Displacement"
+  },
+  {
+    "url": "textures/Rock064_1K-JPG/Rock064_1K-JPG_NormalGL.jpg",
+    "name": "Rock064 1K Normal"
+  },
+  {
+    "url": "textures/Rock064_1K-JPG/Rock064_1K-JPG_Roughness.jpg",
+    "name": "Rock064 1K Roughness"
+  },
+  {
+    "url": "textures/Rock064_2K-JPG/Rock064_2K-JPG_AmbientOcclusion.jpg",
+    "name": "Rock064 2K AO"
+  },
+  {
+    "url": "textures/Rock064_2K-JPG/Rock064_2K-JPG_Color.jpg",
+    "name": "Rock064 2K Color"
+  },
+  {
+    "url": "textures/Rock064_2K-JPG/Rock064_2K-JPG_Displacement.jpg",
+    "name": "Rock064 2K Displacement"
+  },
+  {
+    "url": "textures/Rock064_2K-JPG/Rock064_2K-JPG_NormalGL.jpg",
+    "name": "Rock064 2K Normal"
+  },
+  {
+    "url": "textures/Rock064_2K-JPG/Rock064_2K-JPG_Roughness.jpg",
+    "name": "Rock064 2K Roughness"
+  },
+  {
+    "url": "textures/Rock064_4K-JPG/Rock064_4K-JPG_AmbientOcclusion.jpg",
+    "name": "Rock064 4K AO"
+  },
+  {
+    "url": "textures/Rock064_4K-JPG/Rock064_4K-JPG_Color.jpg",
+    "name": "Rock064 4K Color"
+  },
+  {
+    "url": "textures/Rock064_4K-JPG/Rock064_4K-JPG_Displacement.jpg",
+    "name": "Rock064 4K Displacement"
+  },
+  {
+    "url": "textures/Rock064_4K-JPG/Rock064_4K-JPG_NormalGL.jpg",
+    "name": "Rock064 4K Normal"
+  },
+  {
+    "url": "textures/Rock064_4K-JPG/Rock064_4K-JPG_Roughness.jpg",
+    "name": "Rock064 4K Roughness"
+  },
+  {
+    "url": "textures/WoodFloor004_1K-JPG/WoodFloor004_1K-JPG_Color.jpg",
+    "name": "WoodFloor004 1K Color"
+  },
+  {
+    "url": "textures/WoodFloor004_1K-JPG/WoodFloor004_1K-JPG_Displacement.jpg",
+    "name": "WoodFloor004 1K Displacement"
+  },
+  {
+    "url": "textures/WoodFloor004_1K-JPG/WoodFloor004_1K-JPG_NormalGL.jpg",
+    "name": "WoodFloor004 1K Normal"
+  },
+  {
+    "url": "textures/WoodFloor004_1K-JPG/WoodFloor004_1K-JPG_Roughness.jpg",
+    "name": "WoodFloor004 1K Roughness"
+  },
+  {
+    "url": "textures/WoodFloor004_2K-JPG/WoodFloor004_2K-JPG_Color.jpg",
+    "name": "WoodFloor004 2K Color"
+  },
+  {
+    "url": "textures/WoodFloor004_2K-JPG/WoodFloor004_2K-JPG_Displacement.jpg",
+    "name": "WoodFloor004 2K Displacement"
+  },
+  {
+    "url": "textures/WoodFloor004_2K-JPG/WoodFloor004_2K-JPG_NormalGL.jpg",
+    "name": "WoodFloor004 2K Normal"
+  },
+  {
+    "url": "textures/WoodFloor004_2K-JPG/WoodFloor004_2K-JPG_Roughness.jpg",
+    "name": "WoodFloor004 2K Roughness"
+  },
+  {
+    "url": "textures/WoodFloor004_4K-JPG/WoodFloor004_4K-JPG_Color.jpg",
+    "name": "WoodFloor004 4K Color"
+  },
+  {
+    "url": "textures/WoodFloor004_4K-JPG/WoodFloor004_4K-JPG_Displacement.jpg",
+    "name": "WoodFloor004 4K Displacement"
+  },
+  {
+    "url": "textures/WoodFloor004_4K-JPG/WoodFloor004_4K-JPG_NormalGL.jpg",
+    "name": "WoodFloor004 4K Normal"
+  },
+  {
+    "url": "textures/WoodFloor004_4K-JPG/WoodFloor004_4K-JPG_Roughness.jpg",
+    "name": "WoodFloor004 4K Roughness"
+  }
+]

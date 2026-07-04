@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+**/.DS_Store
+
+# spark.js shaders are proprietary (covered by the spark.js EULA — see
+# https://ludicon.com/sparkjs/eula.html). They are fetched locally for
+# benchmarking but must NOT be committed/redistributed. The instructional
+# README in that dir IS kept; gputex shaders (MIT) under shaders/gputex/ stay.
+shaders/spark/*.wgsl
