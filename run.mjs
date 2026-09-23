@@ -50,6 +50,7 @@ async function buildManifest() {
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 let manifest = await buildManifest()
+if (process.env.TEX_MATCH) manifest = manifest.filter(t => new RegExp(process.env.TEX_MATCH).test(t.name)) // e.g. TEX_MATCH=4K
 if (process.env.TEX_LIMIT) manifest = manifest.slice(0, +process.env.TEX_LIMIT) // smoke-test subset
 await writeFile(join(ROOT, 'textures.json'), JSON.stringify(manifest, null, 2))
 console.log('textures manifest:', manifest.length, 'images')

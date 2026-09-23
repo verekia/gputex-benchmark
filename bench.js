@@ -66,7 +66,7 @@ const FORMATS = [
     key: 'BC5',
     bytesPerBlock: 16,
     entries: [
-      { lib: 'gputex', variant: 'rg',   file: 'shaders/gputex/bc5_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex', sampler: true },
+      { lib: 'gputex', variant: 'rg',   file: 'shaders/gputex/bc5_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
       { lib: 'spark',  variant: 'rg',   file: 'shaders/spark/spark_bc5_rg.wgsl',  entry: 'main',   wg: [16, 8], bind: 'spark' },
     ],
   },
@@ -92,10 +92,11 @@ const FORMATS = [
     ],
   },
   {
-    // ETC2 RGB8 (8 bytes/block, no alpha). gputex now ships an f16 module
-    // (etc2_fast_f16.wgsl — an exact-value port, byte-identical to its f32);
-    // spark's is f16 too. Both write big-endian ETC2 blocks decoded by gputex's
-    // reference decoder (decodeETC2Block).
+    // ETC2 RGB8 (8 bytes/block, no alpha). gputex's f16 module is exact-value
+    // (byte-identical to its f32 where the unorm conversion is exact) and,
+    // from 0.8.0, reads through textureGather (binding 3 sampler); spark's is
+    // f16 too. Both write big-endian ETC2 blocks decoded by gputex's reference
+    // decoder (decodeETC2Block).
     key: 'ETC2',
     bytesPerBlock: 8,
     entries: [
@@ -136,7 +137,12 @@ if (QS.get('prev') === '1') {
 // from before row banding declare only the first 16 bytes, which also binds.
 const PARAMS_SIZE = 32
 
-function makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size }) {
+// gputex shaders that read through textureGather (BC5; ETC2 from 0.8.0) declare a
+// @binding(3) sampler; like the library, bind one exactly when the WGSL does,
+// so a baseline and a current shader can differ on it.
+const usesSampler = code => /@binding\(3\)\s+var\s+\w+\s*:\s*sampler\s*;/.test(code)
+
+function makeBindGroup(device, pipeline, e, { code, srcView, dst, sampler, blocksX, blocksY, size }) {
   if (e.bind === 'gputex') {
     const params = device.createBuffer({ size: PARAMS_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     device.queue.writeBuffer(params, 0, new Uint32Array([blocksX, blocksY, size, size, 0]))
@@ -146,8 +152,7 @@ function makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, bl
         { binding: 0, resource: srcView },
         { binding: 1, resource: { buffer: dst } },
         { binding: 2, resource: { buffer: params } },
-        // BC5's f16 path gathers texels through a sampler (binding 3).
-        ...(e.sampler ? [{ binding: 3, resource: sampler }] : []),
+        ...(usesSampler(code) ? [{ binding: 3, resource: sampler }] : []),
       ],
     })
     return { bindGroup, params }
@@ -238,6 +243,17 @@ function stats(arr) {
   return { min: s[0], p25: q(0.25), median: q(0.5), p75: q(0.75), max: s[s.length - 1], mean }
 }
 
+// Seeded PRNG for the per-round entry order (reproducible runs).
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+const hashStr = str => { let h = 2166136261; for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619); return h >>> 0 }
+
 const medianOf = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2 }
 
 // ---- main --------------------------------------------------------------- //
@@ -304,8 +320,20 @@ async function runBench() {
   // what makes the sub-0.1 ms cells reproducible instead of catching a sagging,
   // ramping clock between synced single dispatches. (The dispatches race on the
   // output buffer, but we never read it for timing.)
-  async function timeBatch(pipeline, bindGroup, dx, dy, batch) {
+  //
+  // `washout` dispatches of the same shader run first in an UNTIMED pass of the
+  // same submission: whatever clock/power state the previous entry's sample left
+  // behind (a 28 ms spark BC1 4K dispatch vs ~10 ms gputex batches) is absorbed
+  // before the timestamps start.
+  async function timeBatch(pipeline, bindGroup, dx, dy, batch, washout = 0) {
     const enc = device.createCommandEncoder()
+    if (washout > 0) {
+      const w = enc.beginComputePass()
+      w.setPipeline(pipeline)
+      w.setBindGroup(0, bindGroup)
+      for (let j = 0; j < washout; j++) w.dispatchWorkgroups(dx, dy, 1)
+      w.end()
+    }
     const pass = enc.beginComputePass({
       timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 },
     })
@@ -400,7 +428,7 @@ async function runBench() {
             compute: { module, entryPoint: e.entry, ...(e.constants ? { constants: e.constants } : {}) },
           })
           const dst = device.createBuffer({ label: `${tag}-out`, size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
-          const { bindGroup, params } = makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size })
+          const { bindGroup, params } = makeBindGroup(device, pipeline, e, { code, srcView, dst, sampler, blocksX, blocksY, size })
           cells.push({ e, tag, pipeline, bindGroup, dst, params, dx: Math.ceil(blocksX / e.wg[0]), dy: Math.ceil(blocksY / e.wg[1]), samples: [] })
         } catch (err) { fail(e, tag, err) }
       }
@@ -417,16 +445,25 @@ async function runBench() {
           c.batch = await calibrateBatch(c.pipeline, c.bindGroup, c.dx, c.dy)
         })
       }
-      // Rotate the start entry each round so none always runs first after the
-      // CPU↔GPU sync gap.
+      // Each round runs the entries in a fresh (seeded) random order, each timed
+      // batch preceded by a ~2 ms washout of the same shader (see timeBatch).
+      // A fixed rotation was biased: with 3 entries the first one followed
+      // spark twice as often as the second, and under thermal load the sample
+      // after a heavy spark dispatch runs differently — two copies of the same
+      // gputex BC1 shader then measured up to 9% apart at 4096².
+      const rand = mulberry32(hashStr(`${job.name}|${size}|${fmt.key}`))
       const rounds = async (n, record) => {
         for (let i = 0; i < n; i++) {
-          for (let j = 0; j < cells.length; j++) {
-            const c = cells[(i + j) % cells.length]
+          const order = [...cells]
+          for (let j = order.length - 1; j > 0; j--) {
+            const k = Math.floor(rand() * (j + 1))
+            ;[order[j], order[k]] = [order[k], order[j]]
+          }
+          for (const c of order) {
             if (!live.has(c)) continue
             await guarded(c, async () => {
-              const v = await timeBatch(c.pipeline, c.bindGroup, c.dx, c.dy, c.batch)
-              if (record) c.samples.push(v)
+              const v = await timeBatch(c.pipeline, c.bindGroup, c.dx, c.dy, c.batch, Math.max(1, Math.round(c.batch / 5)))
+              if (record) c.samples[i] = v
             })
           }
         }
@@ -510,7 +547,7 @@ async function encodeBytesOnce(device, sampler, loadShader, e, fmt, srcView, siz
     compute: { module, entryPoint: e.entry, ...(e.constants ? { constants: e.constants } : {}) },
   })
   const dst = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
-  const { bindGroup, params } = makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size })
+  const { bindGroup, params } = makeBindGroup(device, pipeline, e, { code, srcView, dst, sampler, blocksX, blocksY, size })
 
   const enc = device.createCommandEncoder()
   const pass = enc.beginComputePass()

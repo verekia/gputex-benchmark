@@ -59,7 +59,7 @@ ep('timing:     ' + (meta.interleaved ? 'median paired ratio over ' : 'min of ')
   (meta.aggregatedRuns ? `, median across ${meta.aggregatedRuns} runs` : ''))
 ep('            each sample = many back-to-back dispatches in one timestamped pass (GPU kept saturated' +
   (meta.batchTargetMs ? `, ~${meta.batchTargetMs} ms` : '') + ')')
-if (meta.interleaved) ep('            the libraries\' samples interleaved round-robin per texture × format (same clock/thermal state)')
+if (meta.interleaved) ep('            the libraries\' samples interleaved per texture × format, random order + washout each round')
 ep('quantized:  ' + meta.timestampQuantizationDetected)
 ep('```\n')
 
@@ -108,7 +108,7 @@ sp('| format | Speed | Quality |')
 sp('|---|---|---|')
 for (const f of fmts) sp(`| **${fmtLabel(f)}** | ${aggSpeed(f)} | ${aggQual(f)} |`)
 sp('')
-sp('Results vary by content and resolution: BC1\'s speed margin grows with resolution, spark leads BC7 quality on normal maps, and ASTC quality gaps are largest on grayscale.')
+sp('Results vary by content and resolution: BC1\'s speed margin grows with resolution, spark leads BC7 quality on normal maps, ASTC quality gaps are largest on grayscale, and ETC2 speed splits by content (spark ahead on grayscale maps, gputex on colour / normal).')
 
 // ============ LOW vs HIGH quality mode (within each library) ============= //
 // The "prefer low quality" tradeoff: both libraries drop from a high-quality

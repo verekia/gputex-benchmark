@@ -17,7 +17,7 @@ const FORMATS = [
     g: { file: 'shaders/gputex/bc1_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
     s: { file: 'shaders/spark/spark_bc1_rgb.wgsl', entry: 'main', wg: [16, 8], bind: 'spark' } },
   { key: 'BC5', label: 'BC5', bpb: 16, gvar: 'rg', svar: 'rg',
-    g: { file: 'shaders/gputex/bc5_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex', sampler: true },
+    g: { file: 'shaders/gputex/bc5_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
     s: { file: 'shaders/spark/spark_bc5_rg.wgsl', entry: 'main', wg: [16, 8], bind: 'spark' } },
   { key: 'BC7', label: 'BC7', bpb: 16, gvar: 'rgba', svar: 'rgba',
     g: { file: 'shaders/gputex/bc7_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
@@ -181,7 +181,8 @@ function uploadTexture(src) {
 
 async function encode(e, bpb, srcView, size) {
   const bx = size >> 2, by = size >> 2, outBytes = bx * by * bpb
-  const module = device.createShaderModule({ code: await loadShader(e.file) })
+  const code = await loadShader(e.file)
+  const module = device.createShaderModule({ code })
   const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: e.entry } })
   const dst = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
   let bind
@@ -191,7 +192,8 @@ async function encode(e, bpb, srcView, size) {
     device.queue.writeBuffer(params, 0, new Uint32Array([bx, by, size, size, 0]))
     bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: srcView }, { binding: 1, resource: { buffer: dst } }, { binding: 2, resource: { buffer: params } },
-      ...(e.sampler ? [{ binding: 3, resource: sampler }] : [])] })
+      // a @binding(3) sampler exactly when the WGSL declares one (BC5, ETC2), as the library does
+      ...(/@binding\(3\)\s+var\s+\w+\s*:\s*sampler\s*;/.test(code) ? [{ binding: 3, resource: sampler }] : [])] })
   } else {
     bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: srcView }, { binding: 1, resource: sampler }, { binding: 2, resource: { buffer: dst } }] })
