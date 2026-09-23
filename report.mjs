@@ -1,7 +1,7 @@
 // Turns results.json into the generated blocks of README.md for gputex vs spark:
-// the SUMMARY headline matrix, the MODES low-vs-high tables, the RESULTS
-// per-texture tables, and the ENV environment block, each spliced between its
-// <!-- NAME:START/END --> markers. node report.mjs
+// the SUMMARY headline matrix, the RESULTS per-texture tables, and the ENV
+// environment block, each spliced between its <!-- NAME:START/END --> markers.
+// node report.mjs
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
@@ -110,52 +110,6 @@ for (const f of fmts) sp(`| **${fmtLabel(f)}** | ${aggSpeed(f)} | ${aggQual(f)} 
 sp('')
 sp('Results vary by content and resolution: BC1\'s speed margin grows with resolution, spark leads BC7 quality on normal maps, ASTC quality gaps are largest on grayscale, and ETC2 speed splits by content (spark ahead on grayscale maps, gputex on colour / normal).')
 
-// ============ LOW vs HIGH quality mode (within each library) ============= //
-// The "prefer low quality" tradeoff: both libraries drop from a high-quality
-// format (BC7 desktop / ASTC mobile, 8 bpp) to a low-quality one (BC1 / ETC2,
-// 4 bpp) on the SAME split. This compares each library against ITSELF (not the
-// rival): memory (always 2× smaller), median encode-time ratio, median PSNR gap.
-let mo = ''
-const mp = x => (mo += x + '\n')
-const medn = a => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN }
-const TRACKS = [
-  { name: 'Desktop', low: 'BC1', high: 'BC7', label: 'BC1 (low) vs BC7 (high)' },
-  { name: 'Mobile', low: 'ETC2', high: 'ASTC4x4', label: 'ETC2 (low) vs ASTC (high)' },
-]
-mp('Each library also lets you trade quality for size on the **same** format split — low quality (BC1 desktop / ETC2 mobile, 4 bpp) vs high (BC7 / ASTC, 8 bpp). This is each library measured against **itself**, not the rival. Output is always **2× smaller** in low mode; the encode-speed and quality effects are per-implementation. The **loses less** row calls out which library handles the downgrade better on each axis (smaller speed penalty, smaller PSNR drop):\n')
-const speedTxt = r => (r >= 1.05 ? `${r.toFixed(1)}× faster` : r <= 0.95 ? `${(1 / r).toFixed(1)}× slower` : 'about the same')
-const modeDrops = [] // every library × track PSNR drop, for the footnote
-for (const tr of TRACKS) {
-  const st = {}
-  for (const lib of ['gputex', 'spark']) {
-    const sr = [], qg = []
-    for (const tx of textures) {
-      if (tx.name === ALPHA) continue // procedural card — BC1/ETC2 are N/A on it elsewhere
-      const lo = run(tr.low, lib, tx.name, gvar[tr.low], tx.size), hi = run(tr.high, lib, tx.name, gvar[tr.high], tx.size)
-      if (lo && hi && !lo.error && !hi.error) sr.push(t(hi) / t(lo))
-      const qlo = qm(tr.low, lib, gvar[tr.low], tx.name), qhi = qm(tr.high, lib, gvar[tr.high], tx.name)
-      if (qlo && qhi && qlo.psnr != null && qhi.psnr != null) qg.push(qhi.psnr - qlo.psnr)
-    }
-    st[lib] = { r: medn(sr), dq: medn(qg) } // r = high÷low (higher = less slowdown); dq = PSNR lost going low
-    modeDrops.push(st[lib].dq)
-  }
-  // "loses less" = smaller downgrade penalty: higher speed ratio, smaller PSNR drop
-  const speedWin = st.gputex.r >= st.spark.r ? 'gputex' : 'spark'
-  const qualWin = st.gputex.dq <= st.spark.dq ? 'gputex' : 'spark'
-  mp(`**${tr.name} — ${tr.label}**\n`)
-  mp('| library | memory | encode speed (low vs high) | quality (low vs high) |')
-  mp('|---|---|---|---|')
-  for (const lib of ['gputex', 'spark']) {
-    const sp = lib === speedWin ? `**${speedTxt(st[lib].r)}**` : speedTxt(st[lib].r)
-    const q = lib === qualWin ? `**−${st[lib].dq.toFixed(1)} dB**` : `−${st[lib].dq.toFixed(1)} dB`
-    mp(`| ${lib} | 2× smaller | ${sp} | ${q} |`)
-  }
-  const libE = lib => `${lib === 'gputex' ? G : S} **${lib}**`
-  mp(`| **loses less →** | tie | ${libE(speedWin)} | ${libE(qualWin)} |`)
-  mp('')
-}
-mp(`Low mode always halves the output size and costs ${Math.min(...modeDrops).toFixed(1)}–${Math.max(...modeDrops).toFixed(1)} dB of PSNR (median per library and track). Whether it encodes faster depends on the implementation — see the speed column. The **loses less** row marks which library gives up less on each axis.`)
-
 // ===================== PER-TEXTURE SPEED ================================ //
 p('## ⚡ Speed — per texture (gputex vs spark)\n')
 p(`${G} gputex faster · ${S} spark faster · tie = within 5%. Cell = winner + ratio (faster ÷ slower per-encode time).\n`)
@@ -230,8 +184,8 @@ if (runs.some(r => r.library === 'gputex-prev')) {
   console.log(out.join('\n') + '\n')
 }
 
-// Splice the generated blocks into README.md: SUMMARY (headline matrix), MODES
-// (low-vs-high tables), RESULTS (per-texture tables) and ENV (environment).
+// Splice the generated blocks into README.md: SUMMARY (headline matrix),
+// RESULTS (per-texture tables) and ENV (environment).
 const README = ROOT + 'README.md'
 const splice = (text, name, content) => {
   const s = `<!-- ${name}:START -->`, e = `<!-- ${name}:END -->`
@@ -241,7 +195,6 @@ const splice = (text, name, content) => {
 }
 let readme = await readFile(README, 'utf8')
 readme = splice(readme, 'SUMMARY', sm)
-readme = splice(readme, 'MODES', mo)
 readme = splice(readme, 'RESULTS', md)
 readme = splice(readme, 'ENV', env)
 await writeFile(README, readme)

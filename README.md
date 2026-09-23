@@ -54,30 +54,6 @@ Results vary by content and resolution: BC1's speed margin grows with resolution
   textures (up to 1.2×), spark on 12 — the grayscale AO / roughness / displacement maps, by up to
   1.9× — and 12 tie.
 
-## Low quality vs high quality mode (within each library)
-
-<!-- MODES:START -->
-Each library also lets you trade quality for size on the **same** format split — low quality (BC1 desktop / ETC2 mobile, 4 bpp) vs high (BC7 / ASTC, 8 bpp). This is each library measured against **itself**, not the rival. Output is always **2× smaller** in low mode; the encode-speed and quality effects are per-implementation. The **loses less** row calls out which library handles the downgrade better on each axis (smaller speed penalty, smaller PSNR drop):
-
-**Desktop — BC1 (low) vs BC7 (high)**
-
-| library | memory | encode speed (low vs high) | quality (low vs high) |
-|---|---|---|---|
-| gputex | 2× smaller | **1.6× slower** | −7.1 dB |
-| spark | 2× smaller | 24.1× slower | **−6.7 dB** |
-| **loses less →** | tie | 🟢 **gputex** | ⚡️ **spark** |
-
-**Mobile — ETC2 (low) vs ASTC (high)**
-
-| library | memory | encode speed (low vs high) | quality (low vs high) |
-|---|---|---|---|
-| gputex | 2× smaller | 1.1× faster | −9.4 dB |
-| spark | 2× smaller | **1.4× faster** | **−7.8 dB** |
-| **loses less →** | tie | ⚡️ **spark** | ⚡️ **spark** |
-
-Low mode always halves the output size and costs 6.7–9.4 dB of PSNR (median per library and track). Whether it encodes faster depends on the implementation — see the speed column. The **loses less** row marks which library gives up less on each axis.
-<!-- MODES:END -->
-
 ## Full results
 
 <!-- RESULTS:START -->
