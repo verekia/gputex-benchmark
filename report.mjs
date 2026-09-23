@@ -20,10 +20,12 @@ const gvar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' 
 const svar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' }
 
 const G = '🟢', S = '⚡️' // winner emojis: gputex / spark
-// Reported speed is the MIN of the batched samples — the peak sustained
-// throughput, which is the reproducible signal (slower samples are contaminated
-// by scheduling/throttle blips). `t()` reads it; ratios and Mpix/ms use it too.
-const t = r => r.min
+// Reported speed is the PAIRED time (bench.js): the median per-round ratio to
+// the cell's headline gputex entry, anchored to that entry's min (peak-clock)
+// time. Ratios within a texture × format cell are therefore medians of
+// interleaved paired ratios, immune to the GPU clock swings that make separate
+// per-entry mins flip. Older results without it fall back to the min.
+const t = r => r.paired ?? r.min
 let md = ''
 const p = s => (md += s + '\n')
 const fx = (r, d = 4) => (r == null ? '—' : r.error ? 'ERR' : t(r).toFixed(d))
@@ -53,9 +55,11 @@ ep('```')
 ep('GPU:        ' + JSON.stringify(meta.gpu))
 ep('features:   ' + meta.features.join(', '))
 ep('shader-f16: ' + meta.hasF16 + (meta.hasF16 ? ' (both libraries run f16 kernels)' : ' (f16 downgraded to f32)'))
-ep('timing:     min of ' + meta.iters + ' batched samples (+' + meta.warmup + ' warmup) per cell' +
+ep('timing:     ' + (meta.interleaved ? 'median paired ratio over ' : 'min of ') + meta.iters + ' batched samples (+' + meta.warmup + ' warmup) per cell' +
   (meta.aggregatedRuns ? `, median across ${meta.aggregatedRuns} runs` : ''))
-ep('            each sample = many back-to-back dispatches in one timestamped pass (GPU kept saturated)')
+ep('            each sample = many back-to-back dispatches in one timestamped pass (GPU kept saturated' +
+  (meta.batchTargetMs ? `, ~${meta.batchTargetMs} ms` : '') + ')')
+if (meta.interleaved) ep('            the libraries\' samples interleaved round-robin per texture × format (same clock/thermal state)')
 ep('quantized:  ' + meta.timestampQuantizationDetected)
 ep('```\n')
 
@@ -120,6 +124,7 @@ const TRACKS = [
 ]
 mp('Each library also lets you trade quality for size on the **same** format split — low quality (BC1 desktop / ETC2 mobile, 4 bpp) vs high (BC7 / ASTC, 8 bpp). This is each library measured against **itself**, not the rival. Output is always **2× smaller** in low mode; the encode-speed and quality effects are per-implementation. The **loses less** row calls out which library handles the downgrade better on each axis (smaller speed penalty, smaller PSNR drop):\n')
 const speedTxt = r => (r >= 1.05 ? `${r.toFixed(1)}× faster` : r <= 0.95 ? `${(1 / r).toFixed(1)}× slower` : 'about the same')
+const modeDrops = [] // every library × track PSNR drop, for the footnote
 for (const tr of TRACKS) {
   const st = {}
   for (const lib of ['gputex', 'spark']) {
@@ -132,6 +137,7 @@ for (const tr of TRACKS) {
       if (qlo && qhi && qlo.psnr != null && qhi.psnr != null) qg.push(qhi.psnr - qlo.psnr)
     }
     st[lib] = { r: medn(sr), dq: medn(qg) } // r = high÷low (higher = less slowdown); dq = PSNR lost going low
+    modeDrops.push(st[lib].dq)
   }
   // "loses less" = smaller downgrade penalty: higher speed ratio, smaller PSNR drop
   const speedWin = st.gputex.r >= st.spark.r ? 'gputex' : 'spark'
@@ -148,7 +154,7 @@ for (const tr of TRACKS) {
   mp(`| **loses less →** | tie | ${libE(speedWin)} | ${libE(qualWin)} |`)
   mp('')
 }
-mp('On this GPU, low mode always halves the output size. It does not encode faster — timing is roughly level or slower — and costs about 7–9 dB of PSNR. The **loses less** row marks which library gives up less on each axis.')
+mp(`Low mode always halves the output size and costs ${Math.min(...modeDrops).toFixed(1)}–${Math.max(...modeDrops).toFixed(1)} dB of PSNR (median per library and track). Whether it encodes faster depends on the implementation — see the speed column. The **loses less** row marks which library gives up less on each axis.`)
 
 // ===================== PER-TEXTURE SPEED ================================ //
 p('## ⚡ Speed — per texture (gputex vs spark)\n')
@@ -190,6 +196,38 @@ if (m4rows.length) {
     p(`| ${dispName(tx)} | ${sCell} | ${qCell} |`)
   }
   p('')
+}
+
+// ---- gputex vs its previous shaders (console only) --------------------- //
+// When the run carried the shaders/gputex-prev/ baseline (library
+// 'gputex-prev', timed interleaved with gputex), print how the update moved
+// each format — on its own and against spark. Not written to the README.
+if (runs.some(r => r.library === 'gputex-prev')) {
+  const PREV = 'gputex-prev'
+  const out = ['', `gputex vs ${PREV} (same session, interleaved) — medians across the suite`, '']
+  out.push('| format | speed prev÷new | new faster / slower / tie | PSNR Δ new−prev [min, max] | vs spark speed: prev → new | vs spark PSNR gap: prev → new |')
+  out.push('|---|---|---|---|---|---|')
+  const fmtR = m => (m >= 1 ? `${m.toFixed(3)}× faster` : `${(1 / m).toFixed(3)}× slower`)
+  for (const f of fmts) {
+    const sr = [], dq = [], vsS = { prev: [], cur: [] }, vsQ = { prev: [], cur: [] }
+    for (const tx of textures) {
+      if (alphaNA(tx, f)) continue
+      const g = run(f, 'gputex', tx.name, gvar[f], tx.size), gp = run(f, PREV, tx.name, gvar[f], tx.size), k = run(f, 'spark', tx.name, svar[f], tx.size)
+      const ok = r => r && !r.error
+      if (ok(g) && ok(gp)) sr.push(t(gp) / t(g))
+      if (ok(k) && ok(g) && ok(gp)) { vsS.cur.push(t(k) / t(g)); vsS.prev.push(t(k) / t(gp)) }
+      const qg = qm(f, 'gputex', gvar[f], tx.name), qp = qm(f, PREV, gvar[f], tx.name), qk = qm(f, 'spark', svar[f], tx.name)
+      if (qg?.psnr != null && qp?.psnr != null) dq.push(qg.psnr - qp.psnr)
+      if (qg?.psnr != null && qp?.psnr != null && qk?.psnr != null) { vsQ.cur.push(qg.psnr - qk.psnr); vsQ.prev.push(qp.psnr - qk.psnr) }
+    }
+    if (!sr.length) continue
+    const faster = sr.filter(r => r >= TIE).length, slower = sr.filter(r => r <= 1 / TIE).length
+    const dB = x => (x >= 0 ? '+' : '') + x.toFixed(2)
+    const q = dq.length ? `${dB(median(dq))} dB [${dB(Math.min(...dq))}, ${dB(Math.max(...dq))}]` : 'n/a'
+    const sv = a => { const m = median(a); return m >= 1 ? `${m.toFixed(2)}× faster` : `${(1 / m).toFixed(2)}× slower` }
+    out.push(`| ${fmtLabel(f)} | ${fmtR(median(sr))} | ${faster} / ${slower} / ${sr.length - faster - slower} | ${q} | ${sv(vsS.prev)} → ${sv(vsS.cur)} | ${vsQ.cur.length ? `${dB(median(vsQ.prev))} → ${dB(median(vsQ.cur))} dB` : 'n/a'} |`)
+  }
+  console.log(out.join('\n') + '\n')
 }
 
 // Splice the generated blocks into README.md: SUMMARY (headline matrix), MODES

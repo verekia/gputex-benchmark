@@ -7,3 +7,6 @@ node_modules/
 # benchmarking but must NOT be committed/redistributed. The instructional
 # README in that dir IS kept; gputex shaders (MIT) under shaders/gputex/ stay.
 shaders/spark/*.wgsl
+
+# Previous gputex shaders for a same-session new-vs-previous comparison (see README).
+shaders/gputex-prev/

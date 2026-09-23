@@ -26,7 +26,7 @@ const FORMATS = [
     g: { file: 'shaders/gputex/astc4x4_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
     s: { file: 'shaders/spark/spark_astc_rgba.wgsl', entry: 'main', wg: [16, 8], bind: 'spark' } },
   { key: 'ETC2', label: 'ETC2', bpb: 8, gvar: 'rgb', svar: 'rgb',
-    g: { file: 'shaders/gputex/etc2.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
+    g: { file: 'shaders/gputex/etc2_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex' },
     s: { file: 'shaders/spark/spark_etc2_rgb.wgsl', entry: 'main', wg: [16, 8], bind: 'spark' } },
 ]
 
@@ -186,8 +186,9 @@ async function encode(e, bpb, srcView, size) {
   const dst = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
   let bind
   if (e.bind === 'gputex') {
-    const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
-    device.queue.writeBuffer(params, 0, new Uint32Array([bx, by, size, size]))
+    // Params { blocks_x, blocks_y, width, height, y0 } in a 32-byte slot (y0 = 0: whole grid).
+    const params = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    device.queue.writeBuffer(params, 0, new Uint32Array([bx, by, size, size, 0]))
     bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: srcView }, { binding: 1, resource: { buffer: dst } }, { binding: 2, resource: { buffer: params } },
       ...(e.sampler ? [{ binding: 3, resource: sampler }] : [])] })

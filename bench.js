@@ -25,9 +25,13 @@ import { decodeBC7Full, bc7SupportedMode } from './bc7full.js'
 
 const SIZES = [256, 512, 1024, 2048, 4096]
 const WARMUP = 10      // warmup batches (each batch = many dispatches, see timeBatch)
-const ITERS = 25       // timed batches per cell; min reported
-const BATCH_TARGET_MS = 2.5 // aim each timed batch at ~this long → GPU stays saturated
-const BATCH_MAX = 512  // cap dispatches per batch
+const ITERS = 25       // timed rounds per cell (one batch per entry per round)
+// Aim each timed batch at ~this long (?batchms= overrides). The M3 GPU clock
+// oscillates on a ms timescale under load: at 2.5 ms one shader's own samples
+// spread ~50% (p90/p10) and identical shaders measured up to 25% apart; 10 ms
+// batches average the oscillation out (~8% spread, A/A within 5%).
+const BATCH_TARGET_MS = +(new URLSearchParams(location.search).get('batchms') || 10)
+const BATCH_MAX = 2048 // cap dispatches per batch
 
 // "Analysis" sources (synthetic + packed-materials) run the extra entries — the
 // BC7 no-mode1 variant and spark's rgb variants. The rest of the real-texture
@@ -104,11 +108,60 @@ const FORMATS = [
 // Optional format filter for fast iteration when a change is contained to one
 // format: `FORMAT=ETC2 npm run bench` (run.mjs forwards it as ?format=…). Accepts
 // a comma list and is case-insensitive; "ASTC" matches "ASTC4x4". No filter = all.
-const FORMAT_FILTER = (new URLSearchParams(location.search).get('format') || '')
+const QS = new URLSearchParams(location.search)
+const FORMAT_FILTER = (QS.get('format') || '')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 const inFilter = key => FORMAT_FILTER.length === 0 ||
   FORMAT_FILTER.includes(key.toUpperCase()) || (key === 'ASTC4x4' && FORMAT_FILTER.includes('ASTC'))
 const ACTIVE_FORMATS = FORMATS.filter(f => inFilter(f.key))
+// ?quality=0 skips the (deterministic, CPU-heavy) quality pass — run.mjs sets it
+// on the repeat runs of a RUNS=n aggregate, which only need timings.
+const RUN_QUALITY = QS.get('quality') !== '0'
+
+// Baseline gputex: with ?prev=1 (run.mjs sets it when shaders/gputex-prev/ holds
+// shaders), every format also runs the previous gputex shader as library
+// 'gputex-prev', timed interleaved with the current one, so a shader update can
+// be judged against its predecessor in the same session. The README report
+// ignores it; `npm run report` prints the delta to the console.
+if (QS.get('prev') === '1') {
+  for (const fmt of FORMATS) {
+    const g = fmt.entries.find(e => e.lib === 'gputex' && !e.mode4)
+    fmt.entries.splice(1, 0, { ...g, lib: 'gputex-prev', file: g.file.replace('shaders/gputex/', 'shaders/gputex-prev/') })
+  }
+}
+
+// gputex Params: { blocks_x, blocks_y, width, height, y0 } — 20 bytes, bound as
+// a 32-byte slot like the library does. y0 is the first block row of a row-band
+// dispatch; the harness always dispatches the whole grid, so it is 0. Shaders
+// from before row banding declare only the first 16 bytes, which also binds.
+const PARAMS_SIZE = 32
+
+function makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size }) {
+  if (e.bind === 'gputex') {
+    const params = device.createBuffer({ size: PARAMS_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    device.queue.writeBuffer(params, 0, new Uint32Array([blocksX, blocksY, size, size, 0]))
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: srcView },
+        { binding: 1, resource: { buffer: dst } },
+        { binding: 2, resource: { buffer: params } },
+        // BC5's f16 path gathers texels through a sampler (binding 3).
+        ...(e.sampler ? [{ binding: 3, resource: sampler }] : []),
+      ],
+    })
+    return { bindGroup, params }
+  }
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: srcView },
+      { binding: 1, resource: sampler },
+      { binding: 2, resource: { buffer: dst } },
+    ],
+  })
+  return { bindGroup, params: null }
+}
 
 const log = (...a) => {
   console.log(...a)
@@ -185,6 +238,8 @@ function stats(arr) {
   return { min: s[0], p25: q(0.25), median: q(0.5), p75: q(0.75), max: s[s.length - 1], mean }
 }
 
+const medianOf = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2 }
+
 // ---- main --------------------------------------------------------------- //
 async function runBench() {
   if (!navigator.gpu) throw new Error('WebGPU not available')
@@ -208,6 +263,8 @@ async function runBench() {
     sizes: SIZES,
     warmup: WARMUP,
     iters: ITERS,
+    batchTargetMs: BATCH_TARGET_MS,
+    interleaved: true, // entries of a (source, format) cell timed round-robin
   }
   log('GPU:', JSON.stringify(meta.gpu))
   log('features:', features.join(', '), '\n')
@@ -314,6 +371,17 @@ async function runBench() {
 
     for (const fmt of ACTIVE_FORMATS) {
       const outBytes = blockCount * fmt.bytesPerBlock
+      const fail = (e, tag, err) => {
+        log('  FAIL', tag, err.message)
+        runs.push({ format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size, error: String(err.message || err) })
+      }
+
+      // Build every entry of this (source, format) cell first, then time them
+      // INTERLEAVED — round-robin, one batch each per round — so all entries see
+      // the same GPU clock and thermal state. Timing them one after another let
+      // clock/thermal drift between the entries' windows (Apple GPUs swing up to
+      // ~2×; this fanless M3 also throttles over a long run) land in the ratio.
+      const cells = []
       for (const e of fmt.entries) {
         if (e.extra && !isAnalysis(job.name)) continue
         if (e.mode4 && !MODE4_BENCH.has(job.name)) continue // mode-4 variant: only the beneficiaries
@@ -331,68 +399,74 @@ async function runBench() {
             layout: 'auto',
             compute: { module, entryPoint: e.entry, ...(e.constants ? { constants: e.constants } : {}) },
           })
-
           const dst = device.createBuffer({ label: `${tag}-out`, size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
+          const { bindGroup, params } = makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size })
+          cells.push({ e, tag, pipeline, bindGroup, dst, params, dx: Math.ceil(blocksX / e.wg[0]), dy: Math.ceil(blocksY / e.wg[1]), samples: [] })
+        } catch (err) { fail(e, tag, err) }
+      }
 
-          let bindGroup
-          if (e.bind === 'gputex') {
-            const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
-            device.queue.writeBuffer(params, 0, new Uint32Array([blocksX, blocksY, size, size]))
-            bindGroup = device.createBindGroup({
-              layout: pipeline.getBindGroupLayout(0),
-              entries: [
-                { binding: 0, resource: srcView },
-                { binding: 1, resource: { buffer: dst } },
-                { binding: 2, resource: { buffer: params } },
-                // BC5's f16 path gathers texels through a sampler (binding 3).
-                ...(e.sampler ? [{ binding: 3, resource: sampler }] : []),
-              ],
-            })
-          } else {
-            bindGroup = device.createBindGroup({
-              layout: pipeline.getBindGroupLayout(0),
-              entries: [
-                { binding: 0, resource: srcView },
-                { binding: 1, resource: sampler },
-                { binding: 2, resource: { buffer: dst } },
-              ],
+      const live = new Set(cells)
+      const guarded = async (c, fn) => { try { await fn() } catch (err) { live.delete(c); fail(c.e, c.tag, err) } }
+      // Warm the clock to steady-state boost BEFORE calibrating, so the batch
+      // size is chosen from a warm (not cold, ramping) estimate — otherwise a
+      // cold calibration underestimates and picks a too-small batch that never
+      // saturates. Time-bounded (~30 ms) so slow 4K cells don't warm for seconds.
+      for (const c of cells) {
+        await guarded(c, async () => {
+          for (let i = 0, warm = 0; i < 8 && warm < 30; i++) warm += await timeBatch(c.pipeline, c.bindGroup, c.dx, c.dy, 8) * 8
+          c.batch = await calibrateBatch(c.pipeline, c.bindGroup, c.dx, c.dy)
+        })
+      }
+      // Rotate the start entry each round so none always runs first after the
+      // CPU↔GPU sync gap.
+      const rounds = async (n, record) => {
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < cells.length; j++) {
+            const c = cells[(i + j) % cells.length]
+            if (!live.has(c)) continue
+            await guarded(c, async () => {
+              const v = await timeBatch(c.pipeline, c.bindGroup, c.dx, c.dy, c.batch)
+              if (record) c.samples.push(v)
             })
           }
-
-          const dx = Math.ceil(blocksX / e.wg[0])
-          const dy = Math.ceil(blocksY / e.wg[1])
-
-          // Warm the clock to steady-state boost BEFORE calibrating, so the
-          // batch size is chosen from a warm (not cold, ramping) estimate —
-          // otherwise a cold calibration underestimates and picks a too-small
-          // batch that never saturates, making the mid-size mins jump run to run.
-          // Time-bounded (~30 ms) so slow 4K cells don't warm up for seconds.
-          for (let i = 0, warm = 0; i < 8 && warm < 30; i++) warm += await timeBatch(pipeline, bindGroup, dx, dy, 8) * 8
-          const batch = await calibrateBatch(pipeline, bindGroup, dx, dy)
-          for (let i = 0; i < WARMUP; i++) await timeBatch(pipeline, bindGroup, dx, dy, batch)
-          const samples = []
-          for (let i = 0; i < ITERS; i++) samples.push(await timeBatch(pipeline, bindGroup, dx, dy, batch))
-
-          // detect 100us timestamp quantization (would mean flags missing)
-          for (const v of samples) if (Math.round(v * 1e3) % 100 !== 0) { /* sub-100us resolution present */ }
-          const allQuant = samples.every(v => Math.abs((v * 1e4) - Math.round(v * 1e4) * 1) < 1e-9 && (Math.round(v * 1e6) % 100000 === 0))
-          if (allQuant) quantSet.add(tag)
-
-          const st = stats(samples)
-          const mpix = (size * size) / 1e6
-          runs.push({
-            format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size,
-            blocks: blockCount, bytesPerBlock: fmt.bytesPerBlock, outBytes,
-            workgroup: e.wg, dispatch: [dx, dy], batch,
-            ...st, mpix, mpixPerMs: mpix / st.median,
-          })
-          log(`  ${tag.padEnd(20)} median ${st.median.toFixed(4)} ms  min ${st.min.toFixed(4)}  batch ${batch}  (${(mpix / st.median).toFixed(1)} Mpix/ms)`)
-
-          dst.destroy()
-        } catch (err) {
-          log('  FAIL', tag, err.message)
-          runs.push({ format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size, error: String(err.message || err) })
         }
+      }
+      await rounds(WARMUP, false)
+      await rounds(ITERS, true)
+
+      // PAIRED time: sample i of every entry ran within the same round, a few ms
+      // apart, so the per-round time ratio to a reference entry (the cell's
+      // headline gputex shader) cancels clock swings that the separate per-entry
+      // mins don't (a single high-clock sample flatters whichever entry caught
+      // it). paired = median_i(t_e[i] / t_ref[i]) × min(ref), so a ratio of two
+      // entries' paired times is their median paired ratio vs the reference;
+      // the report compares these.
+      const ref = cells.find(c => live.has(c))
+      for (const c of cells) {
+        if (!live.has(c) || !ref) continue
+        const n = Math.min(c.samples.length, ref.samples.length)
+        c.rel = medianOf(Array.from({ length: n }, (_, i) => c.samples[i] / ref.samples[i]))
+        c.paired = c.rel * Math.min(...ref.samples)
+      }
+
+      for (const c of cells) {
+        c.dst.destroy(); c.params?.destroy()
+        if (!live.has(c)) continue
+        const { e, tag, samples, batch } = c
+        // detect 100us timestamp quantization (would mean flags missing)
+        const allQuant = samples.every(v => Math.abs((v * 1e4) - Math.round(v * 1e4) * 1) < 1e-9 && (Math.round(v * 1e6) % 100000 === 0))
+        if (allQuant) quantSet.add(tag)
+
+        const st = stats(samples)
+        const mpix = (size * size) / 1e6
+        runs.push({
+          format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size,
+          blocks: blockCount, bytesPerBlock: fmt.bytesPerBlock, outBytes,
+          workgroup: e.wg, dispatch: [c.dx, c.dy], batch,
+          ...st, mpix, mpixPerMs: mpix / st.median,
+          paired: c.paired, pairedRef: { library: ref.e.lib, variant: ref.e.variant }, rel: c.rel, samples,
+        })
+        log(`  ${tag.padEnd(24)} paired ${c.paired.toFixed(4)} ms (×${c.rel.toFixed(3)})  min ${st.min.toFixed(4)}  median ${st.median.toFixed(4)}  batch ${batch}`)
       }
     }
     srcTex.destroy()
@@ -402,11 +476,13 @@ async function runBench() {
 
   // ---- quality pass (correctness + PSNR / mode analysis) --------------- //
   let quality = null
-  try {
-    quality = await runQuality({ device, sampler, loadShader, features, manifest })
-  } catch (e) {
-    log('quality pass failed:', e.message)
-    quality = { error: String(e.message || e) }
+  if (RUN_QUALITY) {
+    try {
+      quality = await runQuality({ device, sampler, loadShader, features, manifest })
+    } catch (e) {
+      log('quality pass failed:', e.message)
+      quality = { error: String(e.message || e) }
+    }
   }
 
   const results = { meta, runs, quality }
@@ -434,22 +510,7 @@ async function encodeBytesOnce(device, sampler, loadShader, e, fmt, srcView, siz
     compute: { module, entryPoint: e.entry, ...(e.constants ? { constants: e.constants } : {}) },
   })
   const dst = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
-
-  let bindGroup
-  if (e.bind === 'gputex') {
-    const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
-    device.queue.writeBuffer(params, 0, new Uint32Array([blocksX, blocksY, size, size]))
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: srcView }, { binding: 1, resource: { buffer: dst } }, { binding: 2, resource: { buffer: params } },
-        ...(e.sampler ? [{ binding: 3, resource: sampler }] : [])],
-    })
-  } else {
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: srcView }, { binding: 1, resource: sampler }, { binding: 2, resource: { buffer: dst } }],
-    })
-  }
+  const { bindGroup, params } = makeBindGroup(device, pipeline, e, { srcView, dst, sampler, blocksX, blocksY, size })
 
   const enc = device.createCommandEncoder()
   const pass = enc.beginComputePass()
@@ -462,7 +523,7 @@ async function encodeBytesOnce(device, sampler, loadShader, e, fmt, srcView, siz
   device.queue.submit([enc.finish()])
   await staging.mapAsync(GPUMapMode.READ)
   const bytes = new Uint8Array(staging.getMappedRange().slice(0))
-  staging.unmap(); staging.destroy(); dst.destroy()
+  staging.unmap(); staging.destroy(); dst.destroy(); params?.destroy()
   return bytes
 }
 
@@ -509,6 +570,32 @@ function psnrRef(bytes, ref, size, bpb, decode, srcChannels) {
   }
   if (se === 0) return 99
   return 10 * Math.log10(255 * 255 / (se / n))
+}
+
+// Checks a reference decoder against the hardware decode of the same blocks
+// (`hw`: RGBA8, as decodeASTC4x4GPU returns), value by value, with the
+// reference output rounded to 8 bits the same way. The M3's decode lands 1 LSB
+// off round-to-nearest on a few % of values (its conversion is neither the top
+// byte of the 16-bit result nor an fp16 round trip — both tested, both worse),
+// so 1-LSB differences are counted but expected; anything larger means the GPU
+// decodes a block differently than intended — an encoder or reference bug.
+// (Comparing PSNRs instead is swamped by that rounding on near-lossless maps:
+// up to 10 dB apart at 80 dB PSNR.)
+function refVsHardware(bytes, hw, size, bpb, decode) {
+  const bx = size >> 2, by = size >> 2
+  let mismatch = 0, maxDiff = 0, bad = 0
+  for (let b = 0; b < bx * by; b++) {
+    const { values, channels } = decode(bytes.subarray(b * bpb, b * bpb + bpb))
+    const blockX = (b % bx) * 4, blockY = ((b / bx) | 0) * 4
+    for (let i = 0; i < 16; i++) {
+      const o = ((blockY + (i >> 2)) * size + blockX + (i & 3)) * 4
+      for (let c = 0; c < channels; c++) {
+        const d = Math.abs(Math.round(Math.min(1, Math.max(0, values[i * channels + c])) * 255) - hw[o + c])
+        if (d) { mismatch++; if (d > maxDiff) maxDiff = d; if (d > 1) bad++ }
+      }
+    }
+  }
+  return { refMismatch: mismatch, refMaxDiff: maxDiff, refBad: bad }
 }
 
 function bc7ModeHistogram(bytes) {
@@ -662,18 +749,24 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
             // Cross-check: gputex's output must decode identically with its own
             // reference decoder (validates the full decoder; covers mode 4 too
             // via the rgba-m4 variant).
-            if (e.lib === 'gputex') { try { rec.psnrRef = psnrRef(bytes, ref, size, bpb, REF_DECODE.BC7REF, sc) } catch {} }
+            if (e.lib.startsWith('gputex')) { try { rec.psnrRef = psnrRef(bytes, ref, size, bpb, REF_DECODE.BC7REF, sc) } catch {} }
           }
         } else if (fmt.key === 'ASTC4x4') {
           if (hasASTC) {
             // Native hardware decode: valid for any conforming ASTC block and
             // symmetric across libraries — the fair head-to-head metric.
-            rec.psnr = psnr(ref, await decodeASTC4x4GPU(device, bytes, size), size, sc)
+            const hw = await decodeASTC4x4GPU(device, bytes, size)
+            rec.psnr = psnr(ref, hw, size, sc)
             rec.psnrChannels = 'RGB'
             rec.decoder = 'gpu-hardware'
-            // Cross-check: gputex's own blocks must also round-trip through its
-            // CPU reference decoder and agree with hardware (spark's config throws).
-            if (e.lib === 'gputex') { try { rec.psnrRef = psnrRef(bytes, ref, size, bpb, REF_DECODE.ASTC4x4, sc) } catch {} }
+            // Cross-check: gputex's own blocks must decode bit-identically through
+            // its CPU reference decoder and the hardware (spark's config throws).
+            if (e.lib.startsWith('gputex')) {
+              try {
+                Object.assign(rec, refVsHardware(bytes, hw, size, bpb, REF_DECODE.ASTC4x4))
+                if (rec.refBad) log(`  ASTC REF≠HARDWARE: ${tag} on ${src.name} — ${rec.refBad} values off by >1 LSB (max ${rec.refMaxDiff})`)
+              } catch (err) { rec.refError = String(err.message || err) }
+            }
           } else {
             rec.note = 'astc decode unavailable'
           }
