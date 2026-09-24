@@ -1,265 +1,130 @@
-# gputex vs spark.js — WebGPU texture-compression benchmark
+# gputex vs spark.js
 
-A head-to-head benchmark of the **WebGPU texture-compression compute shaders** shipped by
-[gputex](https://github.com/verekia/gputex) and
-[spark.js](https://github.com/Ludicon/spark.js), for the five block formats both projects
-implement: **BC1, BC5, BC7, ASTC 4×4, ETC2** (RGB). Measured against **gputex 0.9.0**.
+A benchmark of the WebGPU texture-compression shaders in [gputex](https://github.com/verekia/gputex)
+and [spark.js](https://github.com/Ludicon/spark.js). It covers the five formats both libraries
+support: BC1, BC5, BC7, ASTC 4×4 and ETC2. It measures speed (GPU encode time) and quality (PSNR)
+on 34 textures, from 256² to 4096²: PBR material maps (colour, normal, roughness, AO, displacement)
+and a packed-materials atlas.
 
-Speed and quality are measured on a **34-texture suite** in `textures/` — two AmbientCG PBR material
-sets (Rock064, WoodFloor004: Colour / Normal / Roughness / AO / Displacement at 1K / 2K / 4K), a
-packed-materials atlas (256²–4096²), plus a colour and a normal map, and a procedural alpha card.
+gputex 0.9.0 · Apple M3 · Chrome (WebGPU / Metal)
 
-## Results across the suite
-
-Apple M3, Chrome (WebGPU/Metal). Speed = GPU compute time per encode (batched, GPU kept saturated,
-the libraries interleaved and compared as a median of paired ratios, median across 3 runs). Quality =
-PSNR via reference decoders (deterministic).
-gputex always encodes RGBA; the pairing is vs spark's matching RGBA variant.
+## Summary
 
 <!-- SUMMARY:START -->
-Median across the suite (34 textures + a procedural alpha card; the card is N/A for BC1/BC5)
-
-🟢 gputex ahead · ⚡️ spark ahead · tie (within 5%).
-
-Speed = encode-time ratio; quality = PSNR gap (as ×-less-error).
-
-**Bold** = decisive (>1.5×).
+Median across the 34-texture suite. 🟢 gputex ahead · ⚡️ spark ahead · ⚪️ even = within 5%.
 
 | format | Speed | Quality |
 |---|---|---|
 | **BC1** | **🟢 16×** | 🟢 1.17× |
-| **BC5** | 🟢 1.37× | tie |
+| **BC5** | 🟢 1.37× | ⚪️ even |
 | **BC7** | 🟢 1.28× | 🟢 1.19× |
 | **ASTC** | 🟢 1.21× | **🟢 1.69×** |
-| **ETC2** | tie | 🟢 1.27× |
-
-Results vary by content and resolution: BC1's speed margin grows with resolution, spark leads BC7 quality on normal maps, ASTC quality gaps are largest on grayscale, and ETC2 speed splits by content (spark ahead on grayscale maps, gputex on colour / normal).
+| **ETC2** | ⚪️ even | 🟢 1.27× |
 <!-- SUMMARY:END -->
-
-## Per-format summary
-
-- **BC1** — gputex is faster on all 34 (8–89×, the margin grows with resolution) and higher quality
-  on all 34 — its near-flat-block path now also wins the 4 displacement maps spark used to lead.
-- **BC5** — gputex is faster on all 34 (1.06–1.43×, median 1.37×). Quality is level: within a few
-  tenths of a dB everywhere (median −0.09 dB), 32/34 ties. (gputex's library also feeds BC5 a
-  two-channel `rg8` source, halving its reads; here every shader gets the same `rgba8` source.)
-- **BC7** — gputex is faster or level everywhere (32 wins, 3 ties). It encodes mode 6 by default;
-  quality leads on 20/35, with spark ahead on the 14 decorrelated normal / colour maps. Grayscale
-  blocks spanning ≤ 15 levels encode losslessly with exact alpha. The opt-in `adaptiveMode4` raises
-  quality on colour / normal / packed content.
-- **ASTC 4×4** — gputex is faster on all 34 textures plus the alpha card (1.06–2.2×) and has the
-  higher PSNR on all of them, by the widest margin on grayscale.
-- **ETC2** (RGB) — gputex has the higher PSNR (median +1.0 dB, ahead on 33/34, 1 tie). Speed is level
-  overall (median 1.01×) but splits by content: gputex is faster on 9 colour / normal / packed
-  textures (up to 1.24×), spark on 11 — mostly the grayscale AO / roughness / displacement maps, by up
-  to 1.6× — and 14 tie.
 
 ## Full results
 
 <!-- RESULTS:START -->
-## ⚡ Speed — per texture (gputex vs spark)
+### Speed
 
-🟢 gputex faster · ⚡️ spark faster · tie = within 5%. Cell = winner + ratio (faster ÷ slower per-encode time).
+How many times faster the winner encodes.
 
-| texture | size | BC1 | BC5 | BC7 | ASTC | ETC2 |
-|---|---|---|---|---|---|---|
-| color | 1024² | **🟢 52×** | 🟢 1.29× | 🟢 1.18× | 🟢 1.26× | ⚡️ 1.12× |
-| normal | 1024² | **🟢 68×** | 🟢 1.25× | 🟢 1.19× | 🟢 1.18× | 🟢 1.09× |
-| alpha card | 512² | N/A | N/A | 🟢 1.17× | 🟢 1.07× | N/A |
-| packed 256 | 256² | **🟢 7.83×** | 🟢 1.28× | 🟢 1.21× | 🟢 1.09× | 🟢 1.06× |
-| packed 512 | 512² | **🟢 12×** | 🟢 1.31× | 🟢 1.22× | 🟢 1.14× | tie |
-| packed 1024 | 1024² | **🟢 15×** | 🟢 1.32× | 🟢 1.25× | 🟢 1.15× | 🟢 1.06× |
-| packed 2048 | 2048² | **🟢 23×** | 🟢 1.36× | 🟢 1.24× | 🟢 1.11× | 🟢 1.24× |
-| packed 4096 | 4096² | **🟢 41×** | 🟢 1.06× | 🟢 1.07× | 🟢 1.09× | ⚡️ 1.15× |
-| Rock064 1K AO | 1024² | **🟢 21×** | 🟢 1.37× | **🟢 2.18×** | **🟢 2.21×** | ⚡️ 1.05× |
-| Rock064 2K AO | 2048² | **🟢 23×** | 🟢 1.38× | **🟢 2.13×** | **🟢 2.18×** | ⚡️ 1.12× |
-| Rock064 4K AO | 4096² | **🟢 24×** | 🟢 1.30× | **🟢 2.05×** | **🟢 2.11×** | ⚡️ 1.15× |
-| Rock064 1K Color | 1024² | **🟢 10×** | 🟢 1.38× | 🟢 1.27× | 🟢 1.21× | 🟢 1.05× |
-| Rock064 2K Color | 2048² | **🟢 11×** | 🟢 1.34× | 🟢 1.28× | 🟢 1.18× | 🟢 1.07× |
-| Rock064 4K Color | 4096² | **🟢 11×** | 🟢 1.41× | 🟢 1.27× | 🟢 1.21× | tie |
-| Rock064 1K Displacement | 1024² | **🟢 32×** | 🟢 1.24× | **🟢 2.17×** | **🟢 2.18×** | ⚡️ 1.39× |
-| Rock064 2K Displacement | 2048² | **🟢 54×** | 🟢 1.17× | **🟢 2.10×** | **🟢 2.14×** | ⚡️ 1.43× |
-| Rock064 4K Displacement | 4096² | **🟢 89×** | 🟢 1.14× | **🟢 2.10×** | **🟢 2.17×** | **⚡️ 1.60×** |
-| Rock064 1K Normal | 1024² | **🟢 13×** | 🟢 1.40× | 🟢 1.25× | 🟢 1.14× | tie |
-| Rock064 2K Normal | 2048² | **🟢 12×** | 🟢 1.38× | 🟢 1.22× | 🟢 1.16× | tie |
-| Rock064 4K Normal | 4096² | **🟢 12×** | 🟢 1.37× | 🟢 1.29× | 🟢 1.16× | tie |
-| Rock064 1K Roughness | 1024² | **🟢 14×** | 🟢 1.41× | **🟢 2.13×** | **🟢 2.18×** | tie |
-| Rock064 2K Roughness | 2048² | **🟢 14×** | 🟢 1.43× | **🟢 2.03×** | **🟢 2.06×** | tie |
-| Rock064 4K Roughness | 4096² | **🟢 15×** | 🟢 1.34× | **🟢 2.02×** | **🟢 2.00×** | tie |
-| WoodFloor004 1K Color | 1024² | **🟢 16×** | 🟢 1.34× | tie | 🟢 1.09× | tie |
-| WoodFloor004 2K Color | 2048² | **🟢 20×** | 🟢 1.40× | tie | 🟢 1.12× | 🟢 1.11× |
-| WoodFloor004 4K Color | 4096² | **🟢 33×** | 🟢 1.28× | tie | 🟢 1.14× | tie |
-| WoodFloor004 1K Displacement | 1024² | **🟢 15×** | 🟢 1.41× | **🟢 2.03×** | **🟢 2.15×** | tie |
-| WoodFloor004 2K Displacement | 2048² | **🟢 25×** | 🟢 1.39× | **🟢 2.06×** | **🟢 2.10×** | ⚡️ 1.44× |
-| WoodFloor004 4K Displacement | 4096² | **🟢 35×** | 🟢 1.22× | **🟢 2.14×** | **🟢 2.09×** | ⚡️ 1.41× |
-| WoodFloor004 1K Normal | 1024² | **🟢 15×** | 🟢 1.36× | 🟢 1.28× | 🟢 1.13× | tie |
-| WoodFloor004 2K Normal | 2048² | **🟢 14×** | 🟢 1.42× | 🟢 1.29× | 🟢 1.12× | 🟢 1.06× |
-| WoodFloor004 4K Normal | 4096² | **🟢 13×** | 🟢 1.41× | 🟢 1.23× | 🟢 1.18× | 🟢 1.08× |
-| WoodFloor004 1K Roughness | 1024² | **🟢 17×** | 🟢 1.42× | **🟢 2.13×** | **🟢 2.16×** | tie |
-| WoodFloor004 2K Roughness | 2048² | **🟢 19×** | 🟢 1.43× | **🟢 2.08×** | **🟢 2.10×** | tie |
-| WoodFloor004 4K Roughness | 4096² | **🟢 13×** | 🟢 1.39× | **🟢 2.07×** | **🟢 2.07×** | ⚡️ 1.29× |
+| texture | BC1 | BC5 | BC7 | ASTC | ETC2 |
+|---|---|---|---|---|---|
+| color 1K | **🟢 52×** | 🟢 1.29× | 🟢 1.18× | 🟢 1.26× | ⚡️ 1.12× |
+| normal 1K | **🟢 68×** | 🟢 1.25× | 🟢 1.19× | 🟢 1.18× | 🟢 1.09× |
+| alpha card 512 | N/A | N/A | 🟢 1.17× | 🟢 1.07× | N/A |
+| packed 256 | **🟢 7.83×** | 🟢 1.28× | 🟢 1.21× | 🟢 1.09× | 🟢 1.06× |
+| packed 512 | **🟢 12×** | 🟢 1.31× | 🟢 1.22× | 🟢 1.14× | ⚪️ even |
+| packed 1K | **🟢 15×** | 🟢 1.32× | 🟢 1.25× | 🟢 1.15× | 🟢 1.06× |
+| packed 2K | **🟢 23×** | 🟢 1.36× | 🟢 1.24× | 🟢 1.11× | 🟢 1.24× |
+| packed 4K | **🟢 41×** | 🟢 1.06× | 🟢 1.07× | 🟢 1.09× | ⚡️ 1.15× |
+| Rock064 1K AO | **🟢 21×** | 🟢 1.37× | **🟢 2.18×** | **🟢 2.21×** | ⚡️ 1.05× |
+| Rock064 2K AO | **🟢 23×** | 🟢 1.38× | **🟢 2.13×** | **🟢 2.18×** | ⚡️ 1.12× |
+| Rock064 4K AO | **🟢 24×** | 🟢 1.30× | **🟢 2.05×** | **🟢 2.11×** | ⚡️ 1.15× |
+| Rock064 1K Color | **🟢 10×** | 🟢 1.38× | 🟢 1.27× | 🟢 1.21× | 🟢 1.05× |
+| Rock064 2K Color | **🟢 11×** | 🟢 1.34× | 🟢 1.28× | 🟢 1.18× | 🟢 1.07× |
+| Rock064 4K Color | **🟢 11×** | 🟢 1.41× | 🟢 1.27× | 🟢 1.21× | ⚪️ even |
+| Rock064 1K Displacement | **🟢 32×** | 🟢 1.24× | **🟢 2.17×** | **🟢 2.18×** | ⚡️ 1.39× |
+| Rock064 2K Displacement | **🟢 54×** | 🟢 1.17× | **🟢 2.10×** | **🟢 2.14×** | ⚡️ 1.43× |
+| Rock064 4K Displacement | **🟢 89×** | 🟢 1.14× | **🟢 2.10×** | **🟢 2.17×** | **⚡️ 1.60×** |
+| Rock064 1K Normal | **🟢 13×** | 🟢 1.40× | 🟢 1.25× | 🟢 1.14× | ⚪️ even |
+| Rock064 2K Normal | **🟢 12×** | 🟢 1.38× | 🟢 1.22× | 🟢 1.16× | ⚪️ even |
+| Rock064 4K Normal | **🟢 12×** | 🟢 1.37× | 🟢 1.29× | 🟢 1.16× | ⚪️ even |
+| Rock064 1K Roughness | **🟢 14×** | 🟢 1.41× | **🟢 2.13×** | **🟢 2.18×** | ⚪️ even |
+| Rock064 2K Roughness | **🟢 14×** | 🟢 1.43× | **🟢 2.03×** | **🟢 2.06×** | ⚪️ even |
+| Rock064 4K Roughness | **🟢 15×** | 🟢 1.34× | **🟢 2.02×** | **🟢 2.00×** | ⚪️ even |
+| WoodFloor004 1K Color | **🟢 16×** | 🟢 1.34× | ⚪️ even | 🟢 1.09× | ⚪️ even |
+| WoodFloor004 2K Color | **🟢 20×** | 🟢 1.40× | ⚪️ even | 🟢 1.12× | 🟢 1.11× |
+| WoodFloor004 4K Color | **🟢 33×** | 🟢 1.28× | ⚪️ even | 🟢 1.14× | ⚪️ even |
+| WoodFloor004 1K Displacement | **🟢 15×** | 🟢 1.41× | **🟢 2.03×** | **🟢 2.15×** | ⚪️ even |
+| WoodFloor004 2K Displacement | **🟢 25×** | 🟢 1.39× | **🟢 2.06×** | **🟢 2.10×** | ⚡️ 1.44× |
+| WoodFloor004 4K Displacement | **🟢 35×** | 🟢 1.22× | **🟢 2.14×** | **🟢 2.09×** | ⚡️ 1.41× |
+| WoodFloor004 1K Normal | **🟢 15×** | 🟢 1.36× | 🟢 1.28× | 🟢 1.13× | ⚪️ even |
+| WoodFloor004 2K Normal | **🟢 14×** | 🟢 1.42× | 🟢 1.29× | 🟢 1.12× | 🟢 1.06× |
+| WoodFloor004 4K Normal | **🟢 13×** | 🟢 1.41× | 🟢 1.23× | 🟢 1.18× | 🟢 1.08× |
+| WoodFloor004 1K Roughness | **🟢 17×** | 🟢 1.42× | **🟢 2.13×** | **🟢 2.16×** | ⚪️ even |
+| WoodFloor004 2K Roughness | **🟢 19×** | 🟢 1.43× | **🟢 2.08×** | **🟢 2.10×** | ⚪️ even |
+| WoodFloor004 4K Roughness | **🟢 13×** | 🟢 1.39× | **🟢 2.07×** | **🟢 2.07×** | ⚡️ 1.29× |
 
-## 🎨 Quality — per texture (gputex vs spark)
+### Quality
 
-🟢 gputex higher PSNR · ⚡️ spark higher · tie = within 5% MSE. Ratio = how much more squared error (MSE) the loser carries = 10^(ΔdB/10).
+How many times more error (MSE) the loser has.
 
-| texture | size | BC1 | BC5 | BC7 | ASTC | ETC2 |
-|---|---|---|---|---|---|---|
-| color | 1024² | 🟢 1.09× | tie | **⚡️ 1.68×** | **🟢 1.52×** | 🟢 1.12× |
-| normal | 1024² | 🟢 1.07× | tie | ⚡️ 1.18× | **🟢 2.37×** | 🟢 1.43× |
-| alpha card | 512² | N/A | N/A | **🟢 1.52×** | **🟢 1.53×** | N/A |
-| packed 256 | 256² | 🟢 1.33× | tie | ⚡️ 1.47× | **🟢 1.57×** | 🟢 1.30× |
-| packed 512 | 512² | 🟢 1.40× | tie | ⚡️ 1.28× | **🟢 1.69×** | 🟢 1.32× |
-| packed 1024 | 1024² | 🟢 1.37× | tie | ⚡️ 1.12× | **🟢 1.77×** | 🟢 1.28× |
-| packed 2048 | 2048² | 🟢 1.18× | ⚡️ 1.05× | tie | **🟢 1.65×** | **🟢 1.61×** |
-| packed 4096 | 4096² | 🟢 1.21× | tie | 🟢 1.26× | **🟢 1.64×** | **🟢 1.54×** |
-| Rock064 1K AO | 1024² | 🟢 1.27× | tie | 🟢 1.45× | **🟢 18.01×** | **🟢 1.70×** |
-| Rock064 2K AO | 2048² | 🟢 1.25× | tie | 🟢 1.43× | **🟢 17.60×** | **🟢 1.60×** |
-| Rock064 4K AO | 4096² | 🟢 1.26× | tie | 🟢 1.46× | **🟢 17.77×** | **🟢 1.51×** |
-| Rock064 1K Color | 1024² | 🟢 1.19× | tie | ⚡️ 1.48× | **🟢 1.58×** | 🟢 1.11× |
-| Rock064 2K Color | 2048² | 🟢 1.17× | tie | ⚡️ 1.29× | **🟢 1.57×** | 🟢 1.07× |
-| Rock064 4K Color | 4096² | 🟢 1.14× | tie | ⚡️ 1.10× | **🟢 1.62×** | tie |
-| Rock064 1K Displacement | 1024² | 🟢 1.34× | tie | **🟢 6.85×** | **🟢 52.54×** | 🟢 1.24× |
-| Rock064 2K Displacement | 2048² | **🟢 1.54×** | tie | **🟢 29.96×** | **🟢 111.32×** | 🟢 1.22× |
-| Rock064 4K Displacement | 4096² | **🟢 1.86×** | tie | **🟢 104.95×** | **🟢 194.45×** | 🟢 1.25× |
-| Rock064 1K Normal | 1024² | 🟢 1.15× | tie | **⚡️ 1.86×** | 🟢 1.33× | 🟢 1.23× |
-| Rock064 2K Normal | 2048² | 🟢 1.16× | tie | **⚡️ 2.12×** | 🟢 1.33× | 🟢 1.20× |
-| Rock064 4K Normal | 4096² | 🟢 1.16× | tie | **⚡️ 2.30×** | 🟢 1.33× | 🟢 1.22× |
-| Rock064 1K Roughness | 1024² | 🟢 1.06× | tie | 🟢 1.18× | **🟢 15.68×** | **🟢 1.62×** |
-| Rock064 2K Roughness | 2048² | 🟢 1.06× | tie | 🟢 1.18× | **🟢 15.22×** | **🟢 1.55×** |
-| Rock064 4K Roughness | 4096² | 🟢 1.06× | tie | 🟢 1.19× | **🟢 15.21×** | **🟢 1.53×** |
-| WoodFloor004 1K Color | 1024² | 🟢 1.12× | tie | 🟢 1.23× | 🟢 1.47× | 🟢 1.10× |
-| WoodFloor004 2K Color | 2048² | 🟢 1.17× | tie | 🟢 1.27× | 🟢 1.47× | 🟢 1.12× |
-| WoodFloor004 4K Color | 4096² | 🟢 1.23× | tie | 🟢 1.33× | **🟢 1.56×** | 🟢 1.13× |
-| WoodFloor004 1K Displacement | 1024² | 🟢 1.14× | tie | **🟢 2.19×** | **🟢 16.73×** | **🟢 2.03×** |
-| WoodFloor004 2K Displacement | 2048² | 🟢 1.21× | tie | **🟢 4.85×** | **🟢 39.93×** | 🟢 1.36× |
-| WoodFloor004 4K Displacement | 4096² | 🟢 1.33× | tie | **🟢 14.84×** | **🟢 309.66×** | 🟢 1.19× |
-| WoodFloor004 1K Normal | 1024² | 🟢 1.08× | tie | ⚡️ 1.28× | 🟢 1.24× | 🟢 1.09× |
-| WoodFloor004 2K Normal | 2048² | 🟢 1.09× | tie | ⚡️ 1.22× | 🟢 1.23× | 🟢 1.18× |
-| WoodFloor004 4K Normal | 4096² | 🟢 1.19× | tie | **⚡️ 1.62×** | 🟢 1.35× | 🟢 1.11× |
-| WoodFloor004 1K Roughness | 1024² | 🟢 1.07× | ⚡️ 1.05× | 🟢 1.37× | **🟢 14.62×** | **🟢 1.99×** |
-| WoodFloor004 2K Roughness | 2048² | 🟢 1.10× | tie | **🟢 1.72×** | **🟢 16.42×** | **🟢 1.91×** |
-| WoodFloor004 4K Roughness | 4096² | 🟢 1.15× | tie | **🟢 2.22×** | **🟢 24.58×** | **🟢 2.83×** |
-
-> **BC7** uses `bc7full.js` (modes 4/5/6) to decode both libraries — its mode-4 and mode-6 paths match
-> gputex's reference decoder bit-for-bit. **ASTC** uses the M3 hardware decoder; **BC1/BC5** gputex's reference.
-
-## 🎨 BC7 mode 4 (opt-in) — gputex vs spark on the content that benefits most
-
-gputex BC7 encodes mode 6 by default; `new BC7Encoder({ adaptiveMode4: true })` enables mode 4. On the decorrelated colour / normal / packed content that benefits, mode 4 raises PSNR for roughly 50% more encode time. With mode 4 enabled:
-
-| texture | Speed | Quality |
-|---|---|---|
-| color | tie | tie |
-| normal | tie | 🟢 1.19× |
-| packed 512 | ⚡️ 1.20× | 🟢 1.23× |
-| packed 1024 | ⚡️ 1.19× | 🟢 1.36× |
-| Rock064 2K Normal | ⚡️ 1.29× | ⚡️ 1.20× |
-| Rock064 4K Normal | ⚡️ 1.20× | ⚡️ 1.25× |
-| WoodFloor004 4K Normal | ⚡️ 1.28× | tie |
+| texture | BC1 | BC5 | BC7 | ASTC | ETC2 |
+|---|---|---|---|---|---|
+| color 1K | 🟢 1.09× | ⚪️ even | **⚡️ 1.68×** | **🟢 1.52×** | 🟢 1.12× |
+| normal 1K | 🟢 1.07× | ⚪️ even | ⚡️ 1.18× | **🟢 2.37×** | 🟢 1.43× |
+| alpha card 512 | N/A | N/A | **🟢 1.52×** | **🟢 1.53×** | N/A |
+| packed 256 | 🟢 1.33× | ⚪️ even | ⚡️ 1.47× | **🟢 1.57×** | 🟢 1.30× |
+| packed 512 | 🟢 1.40× | ⚪️ even | ⚡️ 1.28× | **🟢 1.69×** | 🟢 1.32× |
+| packed 1K | 🟢 1.37× | ⚪️ even | ⚡️ 1.12× | **🟢 1.77×** | 🟢 1.28× |
+| packed 2K | 🟢 1.18× | ⚡️ 1.05× | ⚪️ even | **🟢 1.65×** | **🟢 1.61×** |
+| packed 4K | 🟢 1.21× | ⚪️ even | 🟢 1.26× | **🟢 1.64×** | **🟢 1.54×** |
+| Rock064 1K AO | 🟢 1.27× | ⚪️ even | 🟢 1.45× | **🟢 18.01×** | **🟢 1.70×** |
+| Rock064 2K AO | 🟢 1.25× | ⚪️ even | 🟢 1.43× | **🟢 17.60×** | **🟢 1.60×** |
+| Rock064 4K AO | 🟢 1.26× | ⚪️ even | 🟢 1.46× | **🟢 17.77×** | **🟢 1.51×** |
+| Rock064 1K Color | 🟢 1.19× | ⚪️ even | ⚡️ 1.48× | **🟢 1.58×** | 🟢 1.11× |
+| Rock064 2K Color | 🟢 1.17× | ⚪️ even | ⚡️ 1.29× | **🟢 1.57×** | 🟢 1.07× |
+| Rock064 4K Color | 🟢 1.14× | ⚪️ even | ⚡️ 1.10× | **🟢 1.62×** | ⚪️ even |
+| Rock064 1K Displacement | 🟢 1.34× | ⚪️ even | **🟢 6.85×** | **🟢 52.54×** | 🟢 1.24× |
+| Rock064 2K Displacement | **🟢 1.54×** | ⚪️ even | **🟢 29.96×** | **🟢 111.32×** | 🟢 1.22× |
+| Rock064 4K Displacement | **🟢 1.86×** | ⚪️ even | **🟢 104.95×** | **🟢 194.45×** | 🟢 1.25× |
+| Rock064 1K Normal | 🟢 1.15× | ⚪️ even | **⚡️ 1.86×** | 🟢 1.33× | 🟢 1.23× |
+| Rock064 2K Normal | 🟢 1.16× | ⚪️ even | **⚡️ 2.12×** | 🟢 1.33× | 🟢 1.20× |
+| Rock064 4K Normal | 🟢 1.16× | ⚪️ even | **⚡️ 2.30×** | 🟢 1.33× | 🟢 1.22× |
+| Rock064 1K Roughness | 🟢 1.06× | ⚪️ even | 🟢 1.18× | **🟢 15.68×** | **🟢 1.62×** |
+| Rock064 2K Roughness | 🟢 1.06× | ⚪️ even | 🟢 1.18× | **🟢 15.22×** | **🟢 1.55×** |
+| Rock064 4K Roughness | 🟢 1.06× | ⚪️ even | 🟢 1.19× | **🟢 15.21×** | **🟢 1.53×** |
+| WoodFloor004 1K Color | 🟢 1.12× | ⚪️ even | 🟢 1.23× | 🟢 1.47× | 🟢 1.10× |
+| WoodFloor004 2K Color | 🟢 1.17× | ⚪️ even | 🟢 1.27× | 🟢 1.47× | 🟢 1.12× |
+| WoodFloor004 4K Color | 🟢 1.23× | ⚪️ even | 🟢 1.33× | **🟢 1.56×** | 🟢 1.13× |
+| WoodFloor004 1K Displacement | 🟢 1.14× | ⚪️ even | **🟢 2.19×** | **🟢 16.73×** | **🟢 2.03×** |
+| WoodFloor004 2K Displacement | 🟢 1.21× | ⚪️ even | **🟢 4.85×** | **🟢 39.93×** | 🟢 1.36× |
+| WoodFloor004 4K Displacement | 🟢 1.33× | ⚪️ even | **🟢 14.84×** | **🟢 309.66×** | 🟢 1.19× |
+| WoodFloor004 1K Normal | 🟢 1.08× | ⚪️ even | ⚡️ 1.28× | 🟢 1.24× | 🟢 1.09× |
+| WoodFloor004 2K Normal | 🟢 1.09× | ⚪️ even | ⚡️ 1.22× | 🟢 1.23× | 🟢 1.18× |
+| WoodFloor004 4K Normal | 🟢 1.19× | ⚪️ even | **⚡️ 1.62×** | 🟢 1.35× | 🟢 1.11× |
+| WoodFloor004 1K Roughness | 🟢 1.07× | ⚡️ 1.05× | 🟢 1.37× | **🟢 14.62×** | **🟢 1.99×** |
+| WoodFloor004 2K Roughness | 🟢 1.10× | ⚪️ even | **🟢 1.72×** | **🟢 16.42×** | **🟢 1.91×** |
+| WoodFloor004 4K Roughness | 🟢 1.15× | ⚪️ even | **🟢 2.22×** | **🟢 24.58×** | **🟢 2.83×** |
 
 <!-- RESULTS:END -->
-
-## How it works
-
-This benchmark does **not** run either library's JavaScript. Both wrap their compute dispatch in
-different work (gputex reads the result back to the CPU; spark copies it into a GPU texture; uploads
-differ), so timing their public APIs would compare surrounding code, not shaders. Instead the harness
-loads the **raw `.wgsl` files** from both projects and drives them through identical machinery:
-
-- one shared `rgba8unorm` source texture per image, uploaded once, reused by every shader;
-- each shader's **own** pipeline (`layout:'auto'`), bind group, `@workgroup_size`, thread→block
-  mapping (gputex `8×8`, spark `16×8`); both libraries run their **`f16`** kernels (the M3 has
-  `shader-f16`);
-- a GPU **timestamp query** brackets only the compute pass. Each sample runs **many back-to-back
-  dispatches in one pass** (~10 ms) so the GPU stays saturated;
-- the shaders competing on a texture × format are timed **interleaved** — one sample each per round,
-  in a fresh (seeded) random order, 25 rounds, every sample preceded by an untimed ~2 ms **washout**
-  of the same shader — and compared by the **median of their per-round time ratios**, so GPU clock
-  swings hit both sides of every ratio equally. Each cell is the **median across 3 runs** (fresh
-  browser each).
-
-Why the pairing: the M3's GPU clock oscillates on a millisecond timescale under sustained load (it is
-a fanless MacBook Air). With 2.5 ms samples, one shader's own samples spread ~50%, and two
-effectively identical shaders (gputex BC5/BC7/ETC2 before and after a one-uniform-add change) timed
-up to 25% apart by their best sample; with 10 ms samples and paired ratios the same A/A check stays
-within 5% on every cell (median 0.3%). Why the random order and washout: a sample also inherits
-state from the one before it. With a fixed rotation, one entry followed spark's heavy BC1 4K
-dispatches (~28 ms each) twice as often as another, and once the machine was hot two copies of the
-same gputex BC1 shader measured up to 9% apart at 4096²; with both fixes they agree within 0.5%.
-
-A quality pass then computes PSNR with one decoder per format, applied to both libraries, on every
-texture in `textures/` (scanned automatically) plus a procedural **alpha card**:
-
-- **BC1 / BC5 / ETC2** — gputex's CPU reference decoder (`gputex/testing`, bundled into `refcodec.js`).
-- **BC7** — `bc7full.js`, this repo's own software decoder for the LDR modes 4/5/6. spark emits modes
-  4 & 6; gputex is mode 6 by default (mode 4 only via the opt-in variant). The decoder's mode-4 and
-  mode-6 paths are **bit-exact** against gputex's reference decoder.
-- **ASTC** — native M3 hardware decode. gputex's blocks are also decoded with its reference decoder
-  and compared value by value: they agree to within 1 LSB everywhere (0.6% of values differ by
-  exactly 1, a last-bit rounding difference in the hardware path; a mis-encoded block would be off by
-  many levels).
-
-Every shader produced full-diversity output; all cross-checks pass; 0 errors across the suite.
 
 ## Run it
 
 ```sh
 npm install
-# populate shaders/spark/ — see shaders/spark/README.md
-npm run bench                    # scans textures/, opens Chrome (headed, real GPU), writes results.json
-FORMAT=ETC2 npm run bench        # only ETC2 (comma list ok, e.g. FORMAT=BC7,ETC2) — fast iteration on one format
-TEX_LIMIT=3 npm run bench        # only the first 3 textures — quick smoke test
-TEX_MATCH=4K npm run bench       # only textures whose name matches the regex
-RUNS=3 npm run bench             # 3 fresh-browser runs, per-cell median (how the README numbers are made)
-npm run report                   # regenerates the generated tables in this README
-npm run compare                  # opens the visual gputex-vs-spark quality tool (flip both on a plane)
-npm run build:refcodec           # (optional) regenerate refcodec.js from latest gputex — needs bun
+# add the spark.js shaders to shaders/spark/ (see shaders/spark/README.md)
+npm run bench    # runs the benchmark in Chrome, writes results.json
+npm run report   # updates the tables in this README
+npm run compare  # visual side-by-side quality comparison
 ```
 
-To judge a gputex shader update against the release it replaces, put the previous
-`*_fast_f16.wgsl` files in `shaders/gputex-prev/` (gitignored). Every format then also times that
-baseline, interleaved with the current shaders and spark, and `npm run report` prints the
-new-vs-previous delta per format to the console (the README tables stay gputex vs spark).
+Requires Node 18+, Google Chrome, and a GPU with WebGPU.
 
-Requirements: Node ≥ 18, Google Chrome installed, a GPU with WebGPU + `timestamp-query` (and
-`shader-f16` for both libraries' f16 kernels). `run.mjs` launches Chrome headed and with
-`--enable-dawn-features=allow_unsafe_apis` / `--disable-dawn-features=timestamp_quantization` to get
-a real GPU and full-precision timestamps. You can also open `bench.html` from any static WebGPU
-server — it runs automatically and prints to the page (timestamp precision may be reduced).
+## License
 
-## Caveats
-
-- **Content- and GPU-dependent.** Results are Apple M3 + Metal on this texture set. Ratios move on
-  other GPUs and other content; the winner already flips by content within this suite.
-- **Pure-shader, not end-to-end.** Upload and readback/copy are excluded by design.
-- **Thermal state moves some ratios.** Where a bandwidth-bound shader meets an ALU-bound one — BC1,
-  and gputex's grayscale fast paths vs spark's full search on AO / roughness / displacement maps —
-  the per-run ratio shifts by up to ~30–50% between runs as the fanless M3 throttles, while two
-  copies of the same shader still agree within 2.4%. Each cell is the median of 3 runs; treat
-  those cells' exact ratios as ±30%.
-- **BC7 without hardware decode.** Scored via the `bc7full.js` software decoder (modes 4/5/6), which
-  covers 100% of both libraries' output here (verified via the block mode histogram).
-
-<!-- ENV:START -->
-## Environment
-
-```
-GPU:        {"vendor":"apple","architecture":"metal-3","device":"","description":""}
-features:   timestamp-query, shader-f16, texture-compression-astc, texture-compression-bc
-shader-f16: true (both libraries run f16 kernels)
-timing:     median paired ratio over 25 batched samples (+10 warmup) per cell, median across 3 runs
-            each sample = many back-to-back dispatches in one timestamped pass (GPU kept saturated, ~10 ms)
-            the libraries' samples interleaved per texture × format, random order + washout each round
-quantized:  false
-```
-
-<!-- ENV:END -->
-
-## Licensing
-
-gputex shaders and its reference decoders are MIT (the decoders are bundled verbatim into the
-committed `refcodec.js`); `bc7full.js` is this repo's own MIT decoder. **spark.js shaders are
-proprietary** (covered by the [spark.js EULA](https://ludicon.com/sparkjs/eula.html)); they are used
-here for a local performance comparison only and are **not** redistributed in this repository. The
-`textures/` set is AmbientCG (CC0) plus the repo's own colour / normal / packed-materials assets.
+MIT. The spark.js shaders are proprietary ([EULA](https://ludicon.com/sparkjs/eula.html)). They are
+used locally for comparison only and are not included in this repository. Textures are from
+AmbientCG (CC0), plus a few of this repo's own.

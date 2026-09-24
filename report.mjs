@@ -1,6 +1,6 @@
 // Turns results.json into the generated blocks of README.md for gputex vs spark:
-// the SUMMARY headline matrix, the RESULTS per-texture tables, and the ENV
-// environment block, each spliced between its <!-- NAME:START/END --> markers.
+// the SUMMARY headline matrix and the RESULTS per-texture tables, each spliced
+// between its <!-- NAME:START/END --> markers.
 // node report.mjs
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +20,7 @@ const gvar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' 
 const svar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' }
 
 const G = '🟢', S = '⚡️' // winner emojis: gputex / spark
+const EVEN = '⚪️ even' // within TIE of each other
 // Reported speed is the PAIRED time (bench.js): the median per-round ratio to
 // the cell's headline gputex entry, anchored to that entry's min (peak-clock)
 // time. Ratios within a texture × format cell are therefore medians of
@@ -38,30 +39,14 @@ const speedCell = (g, k) => {
   if (!g || !k || g.error || k.error) return '—'
   const ratio = t(k) / t(g)
   const r = ratio >= 1 ? ratio : 1 / ratio
-  return r < TIE ? 'tie' : strong(`${ratio >= 1 ? G : S} ${rx(r)}`, r)
+  return r < TIE ? EVEN : strong(`${ratio >= 1 ? G : S} ${rx(r)}`, r)
 }
 // Winner cell for a quality pair (higher PSNR wins). Ratio = loser MSE / winner MSE.
 const qualCell = (g, k) => {
   if (!g || g.psnr == null || !k || k.psnr == null) return 'n/a'
   const ratio = Math.pow(10, Math.abs(g.psnr - k.psnr) / 10)
-  return ratio < TIE ? 'tie' : strong(`${g.psnr >= k.psnr ? G : S} ${ratio.toFixed(2)}×`, ratio)
+  return ratio < TIE ? EVEN : strong(`${g.psnr >= k.psnr ? G : S} ${ratio.toFixed(2)}×`, ratio)
 }
-
-// Environment block → its own ENV markers (near the foot of the README).
-let env = ''
-const ep = s => (env += s + '\n')
-ep('## Environment\n')
-ep('```')
-ep('GPU:        ' + JSON.stringify(meta.gpu))
-ep('features:   ' + meta.features.join(', '))
-ep('shader-f16: ' + meta.hasF16 + (meta.hasF16 ? ' (both libraries run f16 kernels)' : ' (f16 downgraded to f32)'))
-ep('timing:     ' + (meta.interleaved ? 'median paired ratio over ' : 'min of ') + meta.iters + ' batched samples (+' + meta.warmup + ' warmup) per cell' +
-  (meta.aggregatedRuns ? `, median across ${meta.aggregatedRuns} runs` : ''))
-ep('            each sample = many back-to-back dispatches in one timestamped pass (GPU kept saturated' +
-  (meta.batchTargetMs ? `, ~${meta.batchTargetMs} ms` : '') + ')')
-if (meta.interleaved) ep('            the libraries\' samples interleaved per texture × format, random order + washout each round')
-ep('quantized:  ' + meta.timestampQuantizationDetected)
-ep('```\n')
 
 const qm = (format, lib, variant, source) =>
   quality.metrics.find(m => m.format === format && m.library === lib && m.variant === variant && m.source === source)
@@ -79,7 +64,13 @@ if (alphaCard) {
   const ni = textures.findIndex(t => t.name === 'normal')
   textures.splice(ni >= 0 ? ni + 1 : textures.length, 0, alphaCard)
 }
-const dispName = t => (t.name === ALPHA ? 'alpha card' : t.name)
+// Every row name carries its size (1K/2K/4K, or the pixel width below 1K):
+// the AmbientCG names already do, the rest get it appended ("packed 1024" → "packed 1K").
+const sizeLabel = s => (s >= 1024 ? `${s / 1024}K` : `${s}`)
+const dispName = t => {
+  const n = t.name === ALPHA ? 'alpha card' : t.name
+  return /\b\d+K\b/.test(n) ? n : `${n.replace(/ \d+$/, '')} ${sizeLabel(t.size)}`
+}
 const alphaNA = (t, f) => t.name === ALPHA && (f === 'BC1' || f === 'BC5' || f === 'ETC2')
 
 // ===================== SUMMARY (aggregate matrix) ====================== //
@@ -94,63 +85,41 @@ const aggSpeed = f => {
   const rs = []
   for (const tx of textures) { if (alphaNA(tx, f)) continue; const g = run(f, 'gputex', tx.name, gvar[f], tx.size), k = run(f, 'spark', tx.name, svar[f], tx.size); if (g && k && !g.error && !k.error) rs.push(t(k) / t(g)) }
   const m = median(rs), r = m >= 1 ? m : 1 / m
-  return r < TIE ? 'tie' : strong(`${m >= 1 ? G : S} ${rx(r)}`, r)
+  return r < TIE ? EVEN : strong(`${m >= 1 ? G : S} ${rx(r)}`, r)
 }
 // median PSNR gap (gputex − spark, in dB), shown as ×-less-error like the rest
 const aggQual = f => {
   const ds = []
   for (const tx of textures) { if (alphaNA(tx, f)) continue; const g = qm(f, 'gputex', gvar[f], tx.name), k = qm(f, 'spark', svar[f], tx.name); if (g && k && g.psnr != null && k.psnr != null) ds.push(g.psnr - k.psnr) }
   const m = median(ds), ratio = Math.pow(10, Math.abs(m) / 10)
-  return ratio < TIE ? 'tie' : strong(`${m >= 0 ? G : S} ${ratio.toFixed(2)}×`, ratio)
+  return ratio < TIE ? EVEN : strong(`${m >= 0 ? G : S} ${ratio.toFixed(2)}×`, ratio)
 }
-sp('Median across the suite (34 textures + a procedural alpha card; the card is N/A for BC1/BC5)\n\n🟢 gputex ahead · ⚡️ spark ahead · tie (within 5%).\n\nSpeed = encode-time ratio; quality = PSNR gap (as ×-less-error).\n\n**Bold** = decisive (>1.5×).\n')
+sp(`Median across the ${textures.length - (alphaCard ? 1 : 0)}-texture suite. ${G} gputex ahead · ${S} spark ahead · ${EVEN} = within 5%.\n`)
 sp('| format | Speed | Quality |')
 sp('|---|---|---|')
 for (const f of fmts) sp(`| **${fmtLabel(f)}** | ${aggSpeed(f)} | ${aggQual(f)} |`)
-sp('')
-sp('Results vary by content and resolution: BC1\'s speed margin grows with resolution, spark leads BC7 quality on normal maps, ASTC quality gaps are largest on grayscale, and ETC2 speed splits by content (spark ahead on grayscale maps, gputex on colour / normal).')
 
 // ===================== PER-TEXTURE SPEED ================================ //
-p('## ⚡ Speed — per texture (gputex vs spark)\n')
-p(`${G} gputex faster · ${S} spark faster · tie = within 5%. Cell = winner + ratio (faster ÷ slower per-encode time).\n`)
-p('| texture | size | ' + fmts.map(fmtLabel).join(' | ') + ' |')
-p('|---|---|' + '---|'.repeat(fmts.length))
+p('### Speed\n')
+p('How many times faster the winner encodes.\n')
+p('| texture | ' + fmts.map(fmtLabel).join(' | ') + ' |')
+p('|---|' + '---|'.repeat(fmts.length))
 for (const tex of textures) {
   const cells = fmts.map(f => alphaNA(tex, f) ? 'N/A' : speedCell(run(f, 'gputex', tex.name, gvar[f], tex.size), run(f, 'spark', tex.name, svar[f], tex.size)))
-  p(`| ${dispName(tex)} | ${tex.size}² | ` + cells.join(' | ') + ' |')
+  p(`| ${dispName(tex)} | ` + cells.join(' | ') + ' |')
 }
 p('')
 
 // ===================== PER-TEXTURE QUALITY ============================== //
-p('## 🎨 Quality — per texture (gputex vs spark)\n')
-p(`${G} gputex higher PSNR · ${S} spark higher · tie = within 5% MSE. Ratio = how much more squared error (MSE) the loser carries = 10^(ΔdB/10).\n`)
-p('| texture | size | ' + fmts.map(fmtLabel).join(' | ') + ' |')
-p('|---|---|' + '---|'.repeat(fmts.length))
+p('### Quality\n')
+p('How many times more error (MSE) the loser has.\n')
+p('| texture | ' + fmts.map(fmtLabel).join(' | ') + ' |')
+p('|---|' + '---|'.repeat(fmts.length))
 for (const tex of textures) {
   const cells = fmts.map(f => alphaNA(tex, f) ? 'N/A' : qualCell(qm(f, 'gputex', gvar[f], tex.name), qm(f, 'spark', svar[f], tex.name)))
-  p(`| ${dispName(tex)} | ${tex.size}² | ` + cells.join(' | ') + ' |')
+  p(`| ${dispName(tex)} | ` + cells.join(' | ') + ' |')
 }
 p('')
-p('> **BC7** uses `bc7full.js` (modes 4/5/6) to decode both libraries — its mode-4 and mode-6 paths match')
-p('> gputex\'s reference decoder bit-for-bit. **ASTC** uses the M3 hardware decoder; **BC1/BC5** gputex\'s reference.\n')
-
-// ---- BC7 mode 4 (opt-in) vs spark -------------------------------------- //
-// gputex BC7 is mode 6 by default; both passes ran a mode-4-ON variant (rgba-m4)
-// on just the sources that gain most. Same Speed/Quality cells as the tables
-// above, but gputex here is the mode-4 encoder.
-const m4rows = textures.filter(tx => qm('BC7', 'gputex', 'rgba-m4', tx.name)?.psnr != null)
-if (m4rows.length) {
-  p('## 🎨 BC7 mode 4 (opt-in) — gputex vs spark on the content that benefits most\n')
-  p('gputex BC7 encodes mode 6 by default; `new BC7Encoder({ adaptiveMode4: true })` enables mode 4. On the decorrelated colour / normal / packed content that benefits, mode 4 raises PSNR for roughly 50% more encode time. With mode 4 enabled:\n')
-  p('| texture | Speed | Quality |')
-  p('|---|---|---|')
-  for (const tx of m4rows) {
-    const sCell = speedCell(run('BC7', 'gputex', tx.name, 'rgba-m4', tx.size), run('BC7', 'spark', tx.name, svar.BC7, tx.size))
-    const qCell = qualCell(qm('BC7', 'gputex', 'rgba-m4', tx.name), qm('BC7', 'spark', svar.BC7, tx.name))
-    p(`| ${dispName(tx)} | ${sCell} | ${qCell} |`)
-  }
-  p('')
-}
 
 // ---- gputex vs its previous shaders (console only) --------------------- //
 // When the run carried the shaders/gputex-prev/ baseline (library
@@ -184,8 +153,8 @@ if (runs.some(r => r.library === 'gputex-prev')) {
   console.log(out.join('\n') + '\n')
 }
 
-// Splice the generated blocks into README.md: SUMMARY (headline matrix),
-// RESULTS (per-texture tables) and ENV (environment).
+// Splice the generated blocks into README.md: SUMMARY (headline matrix) and
+// RESULTS (per-texture tables).
 const README = ROOT + 'README.md'
 const splice = (text, name, content) => {
   const s = `<!-- ${name}:START -->`, e = `<!-- ${name}:END -->`
@@ -196,6 +165,5 @@ const splice = (text, name, content) => {
 let readme = await readFile(README, 'utf8')
 readme = splice(readme, 'SUMMARY', sm)
 readme = splice(readme, 'RESULTS', md)
-readme = splice(readme, 'ENV', env)
 await writeFile(README, readme)
 console.log('updated README.md —', runs.length, 'speed rows,', quality.metrics.length, 'quality rows')
