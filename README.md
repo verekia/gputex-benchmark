@@ -3,7 +3,7 @@
 A head-to-head benchmark of the **WebGPU texture-compression compute shaders** shipped by
 [gputex](https://github.com/verekia/gputex) and
 [spark.js](https://github.com/Ludicon/spark.js), for the five block formats both projects
-implement: **BC1, BC5, BC7, ASTC 4×4, ETC2** (RGB). Measured against **gputex 0.8.0**.
+implement: **BC1, BC5, BC7, ASTC 4×4, ETC2** (RGB). Measured against **gputex 0.9.0**.
 
 Speed and quality are measured on a **34-texture suite** in `textures/` — two AmbientCG PBR material
 sets (Rock064, WoodFloor004: Colour / Normal / Roughness / AO / Displacement at 1K / 2K / 4K), a
@@ -28,9 +28,9 @@ Speed = encode-time ratio; quality = PSNR gap (as ×-less-error).
 | format | Speed | Quality |
 |---|---|---|
 | **BC1** | **🟢 16×** | 🟢 1.17× |
-| **BC5** | tie | tie |
-| **BC7** | 🟢 1.26× | 🟢 1.14× |
-| **ASTC** | 🟢 1.20× | **🟢 1.69×** |
+| **BC5** | 🟢 1.37× | tie |
+| **BC7** | 🟢 1.28× | 🟢 1.19× |
+| **ASTC** | 🟢 1.21× | **🟢 1.69×** |
 | **ETC2** | tie | 🟢 1.27× |
 
 Results vary by content and resolution: BC1's speed margin grows with resolution, spark leads BC7 quality on normal maps, ASTC quality gaps are largest on grayscale, and ETC2 speed splits by content (spark ahead on grayscale maps, gputex on colour / normal).
@@ -38,21 +38,21 @@ Results vary by content and resolution: BC1's speed margin grows with resolution
 
 ## Per-format summary
 
-- **BC1** — gputex is faster on all 34 (8–111×, the margin grows with resolution) and higher quality
+- **BC1** — gputex is faster on all 34 (8–89×, the margin grows with resolution) and higher quality
   on all 34 — its near-flat-block path now also wins the 4 displacement maps spark used to lead.
-- **BC5** — the two are within a few tenths of a dB everywhere (median −0.09 dB): 32/34 quality ties.
-  Speed is level on 25; spark is 5–24% faster on the other 9 (4 of them displacement maps). (gputex's
-  library feeds BC5 a two-channel `rg8` source, halving its reads; here every shader gets the same
-  `rgba8` source.)
+- **BC5** — gputex is faster on all 34 (1.06–1.43×, median 1.37×). Quality is level: within a few
+  tenths of a dB everywhere (median −0.09 dB), 32/34 ties. (gputex's library also feeds BC5 a
+  two-channel `rg8` source, halving its reads; here every shader gets the same `rgba8` source.)
 - **BC7** — gputex is faster or level everywhere (32 wins, 3 ties). It encodes mode 6 by default;
-  quality leads on 20/35, with spark ahead on the 14 decorrelated normal / colour maps. The opt-in
-  `adaptiveMode4` raises quality on colour / normal / packed content.
+  quality leads on 20/35, with spark ahead on the 14 decorrelated normal / colour maps. Grayscale
+  blocks spanning ≤ 15 levels encode losslessly with exact alpha. The opt-in `adaptiveMode4` raises
+  quality on colour / normal / packed content.
 - **ASTC 4×4** — gputex is faster on all 34 textures plus the alpha card (1.06–2.2×) and has the
   higher PSNR on all of them, by the widest margin on grayscale.
 - **ETC2** (RGB) — gputex has the higher PSNR (median +1.0 dB, ahead on 33/34, 1 tie). Speed is level
-  overall (median 1.02×) but splits by content: gputex is faster on 10 colour / normal / packed
-  textures (up to 1.2×), spark on 12 — the grayscale AO / roughness / displacement maps, by up to
-  1.9× — and 12 tie.
+  overall (median 1.01×) but splits by content: gputex is faster on 9 colour / normal / packed
+  textures (up to 1.24×), spark on 11 — mostly the grayscale AO / roughness / displacement maps, by up
+  to 1.6× — and 14 tie.
 
 ## Full results
 
@@ -63,41 +63,41 @@ Results vary by content and resolution: BC1's speed margin grows with resolution
 
 | texture | size | BC1 | BC5 | BC7 | ASTC | ETC2 |
 |---|---|---|---|---|---|---|
-| color | 1024² | **🟢 51×** | ⚡️ 1.05× | 🟢 1.17× | 🟢 1.27× | ⚡️ 1.19× |
-| normal | 1024² | **🟢 68×** | ⚡️ 1.07× | 🟢 1.19× | 🟢 1.20× | 🟢 1.08× |
-| alpha card | 512² | N/A | N/A | 🟢 1.16× | 🟢 1.06× | N/A |
-| packed 256 | 256² | **🟢 8.03×** | tie | 🟢 1.24× | 🟢 1.09× | 🟢 1.11× |
-| packed 512 | 512² | **🟢 11×** | tie | 🟢 1.23× | 🟢 1.14× | 🟢 1.07× |
-| packed 1024 | 1024² | **🟢 14×** | tie | 🟢 1.26× | 🟢 1.15× | 🟢 1.07× |
-| packed 2048 | 2048² | **🟢 23×** | tie | 🟢 1.22× | 🟢 1.12× | 🟢 1.20× |
-| packed 4096 | 4096² | **🟢 40×** | ⚡️ 1.11× | 🟢 1.06× | 🟢 1.10× | ⚡️ 1.20× |
-| Rock064 1K AO | 1024² | **🟢 23×** | tie | **🟢 2.18×** | **🟢 2.14×** | ⚡️ 1.11× |
-| Rock064 2K AO | 2048² | **🟢 23×** | tie | **🟢 1.77×** | **🟢 1.96×** | ⚡️ 1.16× |
-| Rock064 4K AO | 4096² | **🟢 28×** | ⚡️ 1.07× | **🟢 1.59×** | **🟢 1.61×** | ⚡️ 1.23× |
-| Rock064 1K Color | 1024² | **🟢 13×** | tie | 🟢 1.28× | 🟢 1.18× | tie |
-| Rock064 2K Color | 2048² | **🟢 12×** | tie | 🟢 1.24× | 🟢 1.20× | 🟢 1.08× |
-| Rock064 4K Color | 4096² | **🟢 13×** | tie | 🟢 1.25× | 🟢 1.15× | tie |
-| Rock064 1K Displacement | 1024² | **🟢 36×** | ⚡️ 1.15× | **🟢 2.23×** | **🟢 2.22×** | **⚡️ 1.55×** |
-| Rock064 2K Displacement | 2048² | **🟢 59×** | ⚡️ 1.21× | **🟢 1.99×** | **🟢 2.06×** | **⚡️ 1.74×** |
-| Rock064 4K Displacement | 4096² | **🟢 111×** | ⚡️ 1.24× | **🟢 1.85×** | **🟢 2.06×** | **⚡️ 1.88×** |
-| Rock064 1K Normal | 1024² | **🟢 14×** | tie | 🟢 1.25× | 🟢 1.13× | tie |
-| Rock064 2K Normal | 2048² | **🟢 13×** | tie | 🟢 1.24× | 🟢 1.15× | tie |
-| Rock064 4K Normal | 4096² | **🟢 14×** | tie | 🟢 1.23× | 🟢 1.12× | tie |
-| Rock064 1K Roughness | 1024² | **🟢 15×** | tie | **🟢 2.17×** | **🟢 2.18×** | tie |
-| Rock064 2K Roughness | 2048² | **🟢 14×** | tie | **🟢 1.66×** | **🟢 1.65×** | tie |
-| Rock064 4K Roughness | 4096² | **🟢 16×** | tie | **🟢 2.05×** | **🟢 2.06×** | tie |
-| WoodFloor004 1K Color | 1024² | **🟢 18×** | tie | tie | 🟢 1.09× | 🟢 1.05× |
-| WoodFloor004 2K Color | 2048² | **🟢 20×** | tie | tie | 🟢 1.11× | 🟢 1.08× |
-| WoodFloor004 4K Color | 4096² | **🟢 32×** | ⚡️ 1.09× | tie | 🟢 1.11× | ⚡️ 1.08× |
-| WoodFloor004 1K Displacement | 1024² | **🟢 15×** | tie | **🟢 2.20×** | **🟢 2.19×** | tie |
-| WoodFloor004 2K Displacement | 2048² | **🟢 24×** | tie | **🟢 2.07×** | **🟢 2.06×** | **⚡️ 1.60×** |
-| WoodFloor004 4K Displacement | 4096² | **🟢 36×** | ⚡️ 1.16× | **🟢 2.08×** | **🟢 2.17×** | **⚡️ 1.67×** |
-| WoodFloor004 1K Normal | 1024² | **🟢 15×** | tie | 🟢 1.26× | 🟢 1.12× | 🟢 1.07× |
-| WoodFloor004 2K Normal | 2048² | **🟢 14×** | tie | 🟢 1.28× | 🟢 1.17× | 🟢 1.08× |
-| WoodFloor004 4K Normal | 4096² | **🟢 13×** | tie | 🟢 1.21× | 🟢 1.19× | tie |
-| WoodFloor004 1K Roughness | 1024² | **🟢 17×** | tie | **🟢 2.20×** | **🟢 2.16×** | tie |
-| WoodFloor004 2K Roughness | 2048² | **🟢 19×** | tie | **🟢 2.07×** | **🟢 2.05×** | tie |
-| WoodFloor004 4K Roughness | 4096² | **🟢 13×** | tie | **🟢 2.02×** | **🟢 2.15×** | ⚡️ 1.38× |
+| color | 1024² | **🟢 52×** | 🟢 1.29× | 🟢 1.18× | 🟢 1.26× | ⚡️ 1.12× |
+| normal | 1024² | **🟢 68×** | 🟢 1.25× | 🟢 1.19× | 🟢 1.18× | 🟢 1.09× |
+| alpha card | 512² | N/A | N/A | 🟢 1.17× | 🟢 1.07× | N/A |
+| packed 256 | 256² | **🟢 7.83×** | 🟢 1.28× | 🟢 1.21× | 🟢 1.09× | 🟢 1.06× |
+| packed 512 | 512² | **🟢 12×** | 🟢 1.31× | 🟢 1.22× | 🟢 1.14× | tie |
+| packed 1024 | 1024² | **🟢 15×** | 🟢 1.32× | 🟢 1.25× | 🟢 1.15× | 🟢 1.06× |
+| packed 2048 | 2048² | **🟢 23×** | 🟢 1.36× | 🟢 1.24× | 🟢 1.11× | 🟢 1.24× |
+| packed 4096 | 4096² | **🟢 41×** | 🟢 1.06× | 🟢 1.07× | 🟢 1.09× | ⚡️ 1.15× |
+| Rock064 1K AO | 1024² | **🟢 21×** | 🟢 1.37× | **🟢 2.18×** | **🟢 2.21×** | ⚡️ 1.05× |
+| Rock064 2K AO | 2048² | **🟢 23×** | 🟢 1.38× | **🟢 2.13×** | **🟢 2.18×** | ⚡️ 1.12× |
+| Rock064 4K AO | 4096² | **🟢 24×** | 🟢 1.30× | **🟢 2.05×** | **🟢 2.11×** | ⚡️ 1.15× |
+| Rock064 1K Color | 1024² | **🟢 10×** | 🟢 1.38× | 🟢 1.27× | 🟢 1.21× | 🟢 1.05× |
+| Rock064 2K Color | 2048² | **🟢 11×** | 🟢 1.34× | 🟢 1.28× | 🟢 1.18× | 🟢 1.07× |
+| Rock064 4K Color | 4096² | **🟢 11×** | 🟢 1.41× | 🟢 1.27× | 🟢 1.21× | tie |
+| Rock064 1K Displacement | 1024² | **🟢 32×** | 🟢 1.24× | **🟢 2.17×** | **🟢 2.18×** | ⚡️ 1.39× |
+| Rock064 2K Displacement | 2048² | **🟢 54×** | 🟢 1.17× | **🟢 2.10×** | **🟢 2.14×** | ⚡️ 1.43× |
+| Rock064 4K Displacement | 4096² | **🟢 89×** | 🟢 1.14× | **🟢 2.10×** | **🟢 2.17×** | **⚡️ 1.60×** |
+| Rock064 1K Normal | 1024² | **🟢 13×** | 🟢 1.40× | 🟢 1.25× | 🟢 1.14× | tie |
+| Rock064 2K Normal | 2048² | **🟢 12×** | 🟢 1.38× | 🟢 1.22× | 🟢 1.16× | tie |
+| Rock064 4K Normal | 4096² | **🟢 12×** | 🟢 1.37× | 🟢 1.29× | 🟢 1.16× | tie |
+| Rock064 1K Roughness | 1024² | **🟢 14×** | 🟢 1.41× | **🟢 2.13×** | **🟢 2.18×** | tie |
+| Rock064 2K Roughness | 2048² | **🟢 14×** | 🟢 1.43× | **🟢 2.03×** | **🟢 2.06×** | tie |
+| Rock064 4K Roughness | 4096² | **🟢 15×** | 🟢 1.34× | **🟢 2.02×** | **🟢 2.00×** | tie |
+| WoodFloor004 1K Color | 1024² | **🟢 16×** | 🟢 1.34× | tie | 🟢 1.09× | tie |
+| WoodFloor004 2K Color | 2048² | **🟢 20×** | 🟢 1.40× | tie | 🟢 1.12× | 🟢 1.11× |
+| WoodFloor004 4K Color | 4096² | **🟢 33×** | 🟢 1.28× | tie | 🟢 1.14× | tie |
+| WoodFloor004 1K Displacement | 1024² | **🟢 15×** | 🟢 1.41× | **🟢 2.03×** | **🟢 2.15×** | tie |
+| WoodFloor004 2K Displacement | 2048² | **🟢 25×** | 🟢 1.39× | **🟢 2.06×** | **🟢 2.10×** | ⚡️ 1.44× |
+| WoodFloor004 4K Displacement | 4096² | **🟢 35×** | 🟢 1.22× | **🟢 2.14×** | **🟢 2.09×** | ⚡️ 1.41× |
+| WoodFloor004 1K Normal | 1024² | **🟢 15×** | 🟢 1.36× | 🟢 1.28× | 🟢 1.13× | tie |
+| WoodFloor004 2K Normal | 2048² | **🟢 14×** | 🟢 1.42× | 🟢 1.29× | 🟢 1.12× | 🟢 1.06× |
+| WoodFloor004 4K Normal | 4096² | **🟢 13×** | 🟢 1.41× | 🟢 1.23× | 🟢 1.18× | 🟢 1.08× |
+| WoodFloor004 1K Roughness | 1024² | **🟢 17×** | 🟢 1.42× | **🟢 2.13×** | **🟢 2.16×** | tie |
+| WoodFloor004 2K Roughness | 2048² | **🟢 19×** | 🟢 1.43× | **🟢 2.08×** | **🟢 2.10×** | tie |
+| WoodFloor004 4K Roughness | 4096² | **🟢 13×** | 🟢 1.39× | **🟢 2.07×** | **🟢 2.07×** | ⚡️ 1.29× |
 
 ## 🎨 Quality — per texture (gputex vs spark)
 
@@ -105,7 +105,7 @@ Results vary by content and resolution: BC1's speed margin grows with resolution
 
 | texture | size | BC1 | BC5 | BC7 | ASTC | ETC2 |
 |---|---|---|---|---|---|---|
-| color | 1024² | 🟢 1.09× | tie | **⚡️ 1.69×** | **🟢 1.52×** | 🟢 1.12× |
+| color | 1024² | 🟢 1.09× | tie | **⚡️ 1.68×** | **🟢 1.52×** | 🟢 1.12× |
 | normal | 1024² | 🟢 1.07× | tie | ⚡️ 1.18× | **🟢 2.37×** | 🟢 1.43× |
 | alpha card | 512² | N/A | N/A | **🟢 1.52×** | **🟢 1.53×** | N/A |
 | packed 256 | 256² | 🟢 1.33× | tie | ⚡️ 1.47× | **🟢 1.57×** | 🟢 1.30× |
@@ -113,33 +113,33 @@ Results vary by content and resolution: BC1's speed margin grows with resolution
 | packed 1024 | 1024² | 🟢 1.37× | tie | ⚡️ 1.12× | **🟢 1.77×** | 🟢 1.28× |
 | packed 2048 | 2048² | 🟢 1.18× | ⚡️ 1.05× | tie | **🟢 1.65×** | **🟢 1.61×** |
 | packed 4096 | 4096² | 🟢 1.21× | tie | 🟢 1.26× | **🟢 1.64×** | **🟢 1.54×** |
-| Rock064 1K AO | 1024² | 🟢 1.27× | tie | 🟢 1.35× | **🟢 18.01×** | **🟢 1.70×** |
-| Rock064 2K AO | 2048² | 🟢 1.25× | tie | 🟢 1.32× | **🟢 17.60×** | **🟢 1.60×** |
-| Rock064 4K AO | 4096² | 🟢 1.26× | tie | 🟢 1.35× | **🟢 17.77×** | **🟢 1.51×** |
+| Rock064 1K AO | 1024² | 🟢 1.27× | tie | 🟢 1.45× | **🟢 18.01×** | **🟢 1.70×** |
+| Rock064 2K AO | 2048² | 🟢 1.25× | tie | 🟢 1.43× | **🟢 17.60×** | **🟢 1.60×** |
+| Rock064 4K AO | 4096² | 🟢 1.26× | tie | 🟢 1.46× | **🟢 17.77×** | **🟢 1.51×** |
 | Rock064 1K Color | 1024² | 🟢 1.19× | tie | ⚡️ 1.48× | **🟢 1.58×** | 🟢 1.11× |
 | Rock064 2K Color | 2048² | 🟢 1.17× | tie | ⚡️ 1.29× | **🟢 1.57×** | 🟢 1.07× |
 | Rock064 4K Color | 4096² | 🟢 1.14× | tie | ⚡️ 1.10× | **🟢 1.62×** | tie |
-| Rock064 1K Displacement | 1024² | 🟢 1.34× | tie | **🟢 6.70×** | **🟢 52.54×** | 🟢 1.24× |
-| Rock064 2K Displacement | 2048² | **🟢 1.54×** | tie | **🟢 29.24×** | **🟢 111.32×** | 🟢 1.22× |
-| Rock064 4K Displacement | 4096² | **🟢 1.86×** | tie | **🟢 99.10×** | **🟢 194.45×** | 🟢 1.25× |
+| Rock064 1K Displacement | 1024² | 🟢 1.34× | tie | **🟢 6.85×** | **🟢 52.54×** | 🟢 1.24× |
+| Rock064 2K Displacement | 2048² | **🟢 1.54×** | tie | **🟢 29.96×** | **🟢 111.32×** | 🟢 1.22× |
+| Rock064 4K Displacement | 4096² | **🟢 1.86×** | tie | **🟢 104.95×** | **🟢 194.45×** | 🟢 1.25× |
 | Rock064 1K Normal | 1024² | 🟢 1.15× | tie | **⚡️ 1.86×** | 🟢 1.33× | 🟢 1.23× |
 | Rock064 2K Normal | 2048² | 🟢 1.16× | tie | **⚡️ 2.12×** | 🟢 1.33× | 🟢 1.20× |
 | Rock064 4K Normal | 4096² | 🟢 1.16× | tie | **⚡️ 2.30×** | 🟢 1.33× | 🟢 1.22× |
-| Rock064 1K Roughness | 1024² | 🟢 1.06× | tie | 🟢 1.13× | **🟢 15.68×** | **🟢 1.62×** |
-| Rock064 2K Roughness | 2048² | 🟢 1.06× | tie | 🟢 1.13× | **🟢 15.22×** | **🟢 1.55×** |
-| Rock064 4K Roughness | 4096² | 🟢 1.06× | tie | 🟢 1.14× | **🟢 15.21×** | **🟢 1.53×** |
+| Rock064 1K Roughness | 1024² | 🟢 1.06× | tie | 🟢 1.18× | **🟢 15.68×** | **🟢 1.62×** |
+| Rock064 2K Roughness | 2048² | 🟢 1.06× | tie | 🟢 1.18× | **🟢 15.22×** | **🟢 1.55×** |
+| Rock064 4K Roughness | 4096² | 🟢 1.06× | tie | 🟢 1.19× | **🟢 15.21×** | **🟢 1.53×** |
 | WoodFloor004 1K Color | 1024² | 🟢 1.12× | tie | 🟢 1.23× | 🟢 1.47× | 🟢 1.10× |
 | WoodFloor004 2K Color | 2048² | 🟢 1.17× | tie | 🟢 1.27× | 🟢 1.47× | 🟢 1.12× |
 | WoodFloor004 4K Color | 4096² | 🟢 1.23× | tie | 🟢 1.33× | **🟢 1.56×** | 🟢 1.13× |
-| WoodFloor004 1K Displacement | 1024² | 🟢 1.14× | tie | **🟢 2.04×** | **🟢 16.73×** | **🟢 2.03×** |
-| WoodFloor004 2K Displacement | 2048² | 🟢 1.21× | tie | **🟢 4.57×** | **🟢 39.93×** | 🟢 1.36× |
-| WoodFloor004 4K Displacement | 4096² | 🟢 1.33× | tie | **🟢 15.23×** | **🟢 309.66×** | 🟢 1.19× |
+| WoodFloor004 1K Displacement | 1024² | 🟢 1.14× | tie | **🟢 2.19×** | **🟢 16.73×** | **🟢 2.03×** |
+| WoodFloor004 2K Displacement | 2048² | 🟢 1.21× | tie | **🟢 4.85×** | **🟢 39.93×** | 🟢 1.36× |
+| WoodFloor004 4K Displacement | 4096² | 🟢 1.33× | tie | **🟢 14.84×** | **🟢 309.66×** | 🟢 1.19× |
 | WoodFloor004 1K Normal | 1024² | 🟢 1.08× | tie | ⚡️ 1.28× | 🟢 1.24× | 🟢 1.09× |
 | WoodFloor004 2K Normal | 2048² | 🟢 1.09× | tie | ⚡️ 1.22× | 🟢 1.23× | 🟢 1.18× |
 | WoodFloor004 4K Normal | 4096² | 🟢 1.19× | tie | **⚡️ 1.62×** | 🟢 1.35× | 🟢 1.11× |
-| WoodFloor004 1K Roughness | 1024² | 🟢 1.07× | ⚡️ 1.05× | 🟢 1.19× | **🟢 14.62×** | **🟢 1.99×** |
-| WoodFloor004 2K Roughness | 2048² | 🟢 1.10× | tie | 🟢 1.49× | **🟢 16.42×** | **🟢 1.91×** |
-| WoodFloor004 4K Roughness | 4096² | 🟢 1.15× | tie | **🟢 2.06×** | **🟢 24.58×** | **🟢 2.83×** |
+| WoodFloor004 1K Roughness | 1024² | 🟢 1.07× | ⚡️ 1.05× | 🟢 1.37× | **🟢 14.62×** | **🟢 1.99×** |
+| WoodFloor004 2K Roughness | 2048² | 🟢 1.10× | tie | **🟢 1.72×** | **🟢 16.42×** | **🟢 1.91×** |
+| WoodFloor004 4K Roughness | 4096² | 🟢 1.15× | tie | **🟢 2.22×** | **🟢 24.58×** | **🟢 2.83×** |
 
 > **BC7** uses `bc7full.js` (modes 4/5/6) to decode both libraries — its mode-4 and mode-6 paths match
 > gputex's reference decoder bit-for-bit. **ASTC** uses the M3 hardware decoder; **BC1/BC5** gputex's reference.
@@ -154,8 +154,8 @@ gputex BC7 encodes mode 6 by default; `new BC7Encoder({ adaptiveMode4: true })` 
 | normal | tie | 🟢 1.19× |
 | packed 512 | ⚡️ 1.20× | 🟢 1.23× |
 | packed 1024 | ⚡️ 1.19× | 🟢 1.36× |
-| Rock064 2K Normal | ⚡️ 1.25× | ⚡️ 1.20× |
-| Rock064 4K Normal | ⚡️ 1.25× | ⚡️ 1.25× |
+| Rock064 2K Normal | ⚡️ 1.29× | ⚡️ 1.20× |
+| Rock064 4K Normal | ⚡️ 1.20× | ⚡️ 1.25× |
 | WoodFloor004 4K Normal | ⚡️ 1.28× | tie |
 
 <!-- RESULTS:END -->
