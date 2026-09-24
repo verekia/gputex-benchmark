@@ -32,7 +32,7 @@ const p = s => (md += s + '\n')
 const fx = (r, d = 4) => (r == null ? '—' : r.error ? 'ERR' : t(r).toFixed(d))
 const tp = r => (r == null || r.error ? '—' : (r.mpix / t(r)).toFixed(1))
 const rx = r => (r >= 10 ? r.toFixed(0) : r.toFixed(2)) + '×' // speed ratio
-const TIE = 1.05 // within 5% → a tie, not a win
+const TIE = 1.03 // within 3% → a tie, not a win
 const strong = (cell, r) => (r > 1.5 ? `**${cell}**` : cell) // bold decisive wins (>1.5×)
 // Winner cell for a speed pair (lower time wins). Ratio is always ≥ 1.
 const speedCell = (g, k) => {
@@ -94,7 +94,7 @@ const aggQual = f => {
   const m = median(ds), ratio = Math.pow(10, Math.abs(m) / 10)
   return ratio < TIE ? EVEN : strong(`${m >= 0 ? G : S} ${ratio.toFixed(2)}×`, ratio)
 }
-sp(`Median across the ${textures.length - (alphaCard ? 1 : 0)}-texture suite. ${G} gputex ahead · ${S} spark ahead · ${EVEN} = within 5%.\n`)
+sp(`Median across the ${textures.length - (alphaCard ? 1 : 0)}-texture suite. ${G} gputex ahead · ${S} spark ahead · ${EVEN} = within ${Math.round((TIE - 1) * 100)}%.\n`)
 sp('| format | Speed | Quality |')
 sp('|---|---|---|')
 for (const f of fmts) sp(`| **${fmtLabel(f)}** | ${aggSpeed(f)} | ${aggQual(f)} |`)
