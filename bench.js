@@ -38,16 +38,6 @@ const BATCH_MAX = 2048 // cap dispatches per batch
 // suite runs only the headline gputex-vs-spark pairing, to keep it feasible.
 const isAnalysis = name => name === 'synthetic' || name.startsWith('packed')
 
-// BC7 mode 4 is opt-in (the enable_mode4 override, off by default because it
-// costs ~50% encode time on decorrelated content). These are the sources that
-// gain the most from it — both passes run a mode-4-ON BC7 variant on just these
-// to populate the "mode 4 (opt-in)" speed+quality table.
-const MODE4_BENCH = new Set([
-  'color', 'normal',
-  'Rock064 2K Normal', 'Rock064 4K Normal', 'WoodFloor004 4K Normal',
-  'packed 512', 'packed 1024',
-])
-
 // Format table. Each entry pairs a gputex shader with the closest spark
 // shader. gputex always encodes RGBA and runs one shader per format (the
 // *_fast_f16.wgsl module the library selects on f16 hardware, as here). spark
@@ -75,9 +65,6 @@ const FORMATS = [
     bytesPerBlock: 16,
     entries: [
       { lib: 'gputex', variant: 'rgba', file: 'shaders/gputex/bc7_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
-      // Opt-in mode 4 (enable_mode4 override), timed + scored on just the
-      // MODE4_BENCH sources — see the mode4 gating in both passes.
-      { lib: 'gputex', variant: 'rgba-m4', file: 'shaders/gputex/bc7_fast_f16.wgsl', entry: 'encode', wg: [8, 8], bind: 'gputex', constants: { enable_mode4: true }, mode4: true },
       { lib: 'spark',  variant: 'rgba', file: 'shaders/spark/spark_bc7_rgba.wgsl', entry: 'main',   wg: [16, 8], bind: 'spark' },
       { lib: 'spark',  variant: 'rgb',  file: 'shaders/spark/spark_bc7_rgb.wgsl',  entry: 'main',   wg: [16, 8], bind: 'spark', extra: true },
     ],
@@ -126,7 +113,7 @@ const RUN_QUALITY = QS.get('quality') !== '0'
 // ignores it; `npm run report` prints the delta to the console.
 if (QS.get('prev') === '1') {
   for (const fmt of FORMATS) {
-    const g = fmt.entries.find(e => e.lib === 'gputex' && !e.mode4)
+    const g = fmt.entries.find(e => e.lib === 'gputex')
     fmt.entries.splice(1, 0, { ...g, lib: 'gputex-prev', file: g.file.replace('shaders/gputex/', 'shaders/gputex-prev/') })
   }
 }
@@ -412,7 +399,6 @@ async function runBench() {
       const cells = []
       for (const e of fmt.entries) {
         if (e.extra && !isAnalysis(job.name)) continue
-        if (e.mode4 && !MODE4_BENCH.has(job.name)) continue // mode-4 variant: only the beneficiaries
         const tag = `${fmt.key}/${e.lib}-${e.variant}`
         try {
           const code = await loadShader(e.file)
@@ -754,7 +740,6 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
     const sc = PSNR_CHANNELS[fmt.key]
     for (const e of fmt.entries) {
       if (e.extra && !isAnalysis(src.name)) continue
-      if (e.mode4 && !MODE4_BENCH.has(src.name)) continue // mode-4 variant: only the beneficiaries
       const tag = `${fmt.key}/${e.lib}-${e.variant}`
       try {
         const bytes = await encodeBytesOnce(device, sampler, loadShader, e, fmt, srcView, size)
@@ -771,8 +756,8 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
         } else if (fmt.key === 'BC7') {
           rec.bc7Modes = bc7ModeHistogram(bytes)
           // Full decoder (modes 4/5/6) decodes BOTH libraries → real PSNR
-          // head-to-head. spark uses modes 4 and 6; gputex is mode 6 by default
-          // (the rgba-m4 variant opts into mode 4).
+          // head-to-head. Both libraries use modes 4 and 6 (gputex from 0.12.0;
+          // mode 6 only before).
           // Guard: any block in an unsupported mode would be mis-scored, so
           // check the histogram and bail to a note if one appears.
           const unsupported = rec.bc7Modes.reduce((n, count, mode) => n + (count > 0 && !bc7SupportedMode(mode) ? count : 0), 0)
@@ -784,8 +769,7 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
             rec.psnrChannels = 'RGB'
             rec.decoder = 'bc7-full(4/5/6)'
             // Cross-check: gputex's output must decode identically with its own
-            // reference decoder (validates the full decoder; covers mode 4 too
-            // via the rgba-m4 variant).
+            // reference decoder (validates the full decoder, modes 4 and 6).
             if (e.lib.startsWith('gputex')) { try { rec.psnrRef = psnrRef(bytes, ref, size, bpb, REF_DECODE.BC7REF, sc) } catch {} }
           }
         } else if (fmt.key === 'ASTC4x4') {
