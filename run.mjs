@@ -41,13 +41,32 @@ async function walk(dir) {
   }
   return out
 }
+// Whether a file's header rules out transparency, by gputex's rule for picking
+// its opaque-source ASTC kernel (imageHeaderIsOpaque): JPEG, or PNG colour
+// type 0/2/3 with no tRNS chunk before the first IDAT. RGBA PNGs say no even
+// when every pixel is opaque.
+async function fileOpaque(path) {
+  const b = await readFile(path)
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true
+  if (b.length < 33 || b.toString('latin1', 1, 4) !== 'PNG' || b.toString('latin1', 12, 16) !== 'IHDR') return false
+  if (![0, 2, 3].includes(b[25])) return false
+  for (let off = 8; off + 8 <= b.length; off += 12 + b.readUInt32BE(off)) {
+    const type = b.toString('latin1', off + 4, off + 8)
+    if (type === 'tRNS') return false
+    if (type === 'IDAT') return true
+  }
+  return false
+}
 async function buildManifest() {
   const dir = join(ROOT, 'textures')
   let files = []
   try { files = await walk(dir) } catch { return [] }
-  return files
-    .map(f => ({ url: relative(ROOT, f).split(/[/\\]/).join('/'), name: niceName(relative(dir, f).split(/[/\\]/).join('/')) }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const entries = await Promise.all(files.map(async f => ({
+    url: relative(ROOT, f).split(/[/\\]/).join('/'),
+    name: niceName(relative(dir, f).split(/[/\\]/).join('/')),
+    fileOpaque: await fileOpaque(f),
+  })))
+  return entries.sort((a, b) => a.name.localeCompare(b.name))
 }
 let manifest = await buildManifest()
 if (process.env.TEX_MATCH) manifest = manifest.filter(t => new RegExp(process.env.TEX_MATCH).test(t.name)) // e.g. TEX_MATCH=4K
@@ -72,8 +91,8 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r))
 const port = server.address().port
 
-let hasPrev = false
-try { hasPrev = (await readdir(join(ROOT, 'shaders', 'gputex-prev'))).some(f => f.endsWith('.wgsl')) } catch {}
+let hasPrev = false, prevFiles = []
+try { prevFiles = (await readdir(join(ROOT, 'shaders', 'gputex-prev'))).filter(f => f.endsWith('.wgsl')); hasPrev = prevFiles.length > 0 } catch {}
 if (process.env.PREV === '0') hasPrev = false
 const RUNS = Math.max(1, Math.floor(+(process.env.RUNS || 1)))
 
@@ -81,7 +100,7 @@ async function benchOnce(runIndex) {
   // FORMAT=ETC2 (or a comma list) runs only those formats — bench.js reads ?format=…
   const q = new URLSearchParams()
   if (process.env.FORMAT) q.set('format', process.env.FORMAT)
-  if (hasPrev) q.set('prev', '1')
+  if (hasPrev) { q.set('prev', '1'); q.set('prevfiles', prevFiles.join(',')) }
   if (runIndex > 0 || process.env.QUALITY === '0') q.set('quality', '0') // deterministic — score it once
   if (process.env.BATCH_MS) q.set('batchms', process.env.BATCH_MS)
   const url = `http://127.0.0.1:${port}/bench.html${q.size ? '?' + q : ''}`

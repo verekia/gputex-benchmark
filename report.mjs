@@ -98,6 +98,15 @@ sp(`Median across the ${textures.length - (alphaCard ? 1 : 0)}-texture suite. ${
 sp('| format | Speed | Quality |')
 sp('|---|---|---|')
 for (const f of fmts) sp(`| **${fmtLabel(f)}** | ${aggSpeed(f)} | ${aggQual(f)} |`)
+// ASTC runs gputex's opaque-source kernel on files that cannot carry alpha.
+const opaqueFiles = new Set(meta.fileOpaque || [])
+const opaqueAstc = textures.filter(tx => opaqueFiles.has(tx.name) && run('ASTC4x4', 'gputex', tx.name, gvar.ASTC4x4, tx.size)?.shader?.includes('opaque'))
+if (opaqueAstc.length) {
+  const general = textures.filter(tx => tx.name !== ALPHA && !opaqueAstc.includes(tx)).map(dispName)
+  const list = a => (a.length > 1 ? a.slice(0, -1).join(', ') + ' and ' + a.at(-1) : a[0])
+  sp(`\nASTC: like \`compressTexture\`, gputex runs its opaque-source kernel on the ${opaqueAstc.length} files that cannot carry alpha (JPEG, RGB PNG)` +
+    (general.length ? ` and its general kernel on the RGBA files (${list(general)}) and the alpha card.` : ' and its general kernel on the alpha card.'))
+}
 
 // ===================== PER-TEXTURE SPEED ================================ //
 p('### Speed\n')

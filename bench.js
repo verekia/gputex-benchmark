@@ -39,8 +39,10 @@ const BATCH_MAX = 2048 // cap dispatches per batch
 const isAnalysis = name => name === 'synthetic' || name.startsWith('packed')
 
 // Format table. Each entry pairs a gputex shader with the closest spark
-// shader. gputex always encodes RGBA and runs one shader per format (the
-// *_fast_f16.wgsl module the library selects on f16 hardware, as here). spark
+// shader. gputex encodes RGBA with the shader the library selects on f16
+// hardware: the *_fast_f16.wgsl module, except that ASTC runs its
+// opaque-source kernel (`opaqueFile`) on files that cannot carry alpha, as
+// compressTexture does (run.mjs reads each file's header). spark
 // ships separate rgb / rgba variants for BC7 and ASTC; gputex's headline
 // pairing is spark's rgba variant, and the rgb variant is an extra data point.
 const FORMATS = [
@@ -73,7 +75,7 @@ const FORMATS = [
     key: 'ASTC4x4',
     bytesPerBlock: 16,
     entries: [
-      { lib: 'gputex', variant: 'rgba', file: 'shaders/gputex/astc4x4_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
+      { lib: 'gputex', variant: 'rgba', file: 'shaders/gputex/astc4x4_fast_f16.wgsl', opaqueFile: 'shaders/gputex/astc4x4_opaque_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
       { lib: 'spark',  variant: 'rgba', file: 'shaders/spark/spark_astc_rgba.wgsl',  entry: 'main',   wg: [16, 8], bind: 'spark' },
       { lib: 'spark',  variant: 'rgb',  file: 'shaders/spark/spark_astc_rgb.wgsl',   entry: 'main',   wg: [16, 8], bind: 'spark', extra: true },
     ],
@@ -111,10 +113,14 @@ const RUN_QUALITY = QS.get('quality') !== '0'
 // 'gputex-prev', timed interleaved with the current one, so a shader update can
 // be judged against its predecessor in the same session. The README report
 // ignores it; `npm run report` prints the delta to the console.
+// Shader files present in shaders/gputex-prev/ (run.mjs passes the list).
+const PREV_FILES = new Set((QS.get('prevfiles') || '').split(',').filter(Boolean).map(f => 'shaders/gputex-prev/' + f))
 if (QS.get('prev') === '1') {
   for (const fmt of FORMATS) {
     const g = fmt.entries.find(e => e.lib === 'gputex')
-    fmt.entries.splice(1, 0, { ...g, lib: 'gputex-prev', file: g.file.replace('shaders/gputex/', 'shaders/gputex-prev/') })
+    // (A baseline without an opaque-source kernel runs its general one everywhere.)
+    const prevOpaque = g.opaqueFile && g.opaqueFile.replace('shaders/gputex/', 'shaders/gputex-prev/')
+    fmt.entries.splice(1, 0, { ...g, lib: 'gputex-prev', file: g.file.replace('shaders/gputex/', 'shaders/gputex-prev/'), opaqueFile: PREV_FILES.has(prevOpaque) ? prevOpaque : undefined })
   }
 }
 
@@ -160,6 +166,10 @@ const log = (...a) => {
   const el = document.getElementById('log')
   if (el) { el.textContent += a.join(' ') + '\n'; el.scrollTop = el.scrollHeight }
 }
+
+// The entry with the shader the library would run on this source: the
+// opaque-source kernel for a file that cannot carry alpha, when it has one.
+const shaderFor = (e, fileOpaque) => (fileOpaque && e.opaqueFile ? { ...e, file: e.opaqueFile } : e)
 
 // ---- deterministic procedural test image -------------------------------- //
 // Resolution-independent: the same "scene" sampled at each size, so content
@@ -354,6 +364,9 @@ async function runBench() {
   // Real-texture manifest (textures/ scanned by run.mjs into textures.json).
   const manifest = await fetch('textures.json').then(r => r.ok ? r.json() : []).catch(() => [])
   meta.textureCount = manifest.length
+  // Files whose header rules out alpha (run.mjs): ASTC runs gputex's
+  // opaque-source kernel on these, as compressTexture does.
+  meta.fileOpaque = manifest.filter(t => t.fileOpaque).map(t => t.name)
   log('textures:', manifest.length, '\n')
 
   // Speed sources: the synthetic card at every size, plus every real texture at
@@ -361,7 +374,7 @@ async function runBench() {
   // spark's adaptive mode-4/6 mix make BC7 timing content-dependent.
   const SPEED_SOURCES = [
     ...SIZES.map(s => ({ name: 'synthetic', size: s })),
-    ...manifest.map(t => ({ name: t.name, url: t.url })),
+    ...manifest.map(t => ({ name: t.name, url: t.url, fileOpaque: !!t.fileOpaque })),
   ]
   for (const job of SPEED_SOURCES) {
     let imgCanvas, size
@@ -397,8 +410,9 @@ async function runBench() {
       // clock/thermal drift between the entries' windows (Apple GPUs swing up to
       // ~2×; this fanless M3 also throttles over a long run) land in the ratio.
       const cells = []
-      for (const e of fmt.entries) {
-        if (e.extra && !isAnalysis(job.name)) continue
+      for (const e0 of fmt.entries) {
+        if (e0.extra && !isAnalysis(job.name)) continue
+        const e = shaderFor(e0, job.fileOpaque)
         const tag = `${fmt.key}/${e.lib}-${e.variant}`
         try {
           const code = await loadShader(e.file)
@@ -483,7 +497,7 @@ async function runBench() {
         const st = stats(samples)
         const mpix = (size * size) / 1e6
         runs.push({
-          format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size,
+          format: fmt.key, library: e.lib, variant: e.variant, source: job.name, size, shader: e.file,
           blocks: blockCount, bytesPerBlock: fmt.bytesPerBlock, outBytes,
           workgroup: e.wg, dispatch: [c.dx, c.dy], batch,
           ...st, mpix, mpixPerMs: mpix / st.median,
@@ -738,13 +752,14 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
   for (const fmt of ACTIVE_FORMATS) {
     const bpb = fmt.bytesPerBlock
     const sc = PSNR_CHANNELS[fmt.key]
-    for (const e of fmt.entries) {
-      if (e.extra && !isAnalysis(src.name)) continue
+    for (const e0 of fmt.entries) {
+      if (e0.extra && !isAnalysis(src.name)) continue
+      const e = shaderFor(e0, src.fileOpaque)
       const tag = `${fmt.key}/${e.lib}-${e.variant}`
       try {
         const bytes = await encodeBytesOnce(device, sampler, loadShader, e, fmt, srcView, size)
         const rec = {
-          format: fmt.key, library: e.lib, variant: e.variant, source: src.name, size,
+          format: fmt.key, library: e.lib, variant: e.variant, source: src.name, size, shader: e.file,
           distinctBlocks: distinctBlocks(bytes, bpb), psnr: null, psnrChannels: null, decoder: null,
         }
 
@@ -818,7 +833,7 @@ async function runQuality({ device, sampler, loadShader, features, manifest }) {
   // Load-and-score one source at a time so we never hold 34 decoded images in RAM.
   for (const job of [{ name: 'synthetic' }, ...(manifest || [])]) {
     let src
-    try { src = job.url ? await loadImageSource(job.url, job.name) : { name: 'synthetic', size: QSIZE, canvas: sm.canvas, pixels: sm.pixels } }
+    try { src = job.url ? { ...await loadImageSource(job.url, job.name), fileOpaque: !!job.fileOpaque } : { name: 'synthetic', size: QSIZE, canvas: sm.canvas, pixels: sm.pixels } }
     catch (err) { log(`  (skipping quality source ${job.name}: ${err.message})`); continue }
     sizes[src.name] = src.size
     log(`\n=== quality @ ${src.size}² — source: ${src.name} ===`)
