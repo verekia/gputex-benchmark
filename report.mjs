@@ -9,15 +9,16 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const { meta, runs, quality } = JSON.parse(await readFile(ROOT + 'results.json', 'utf8'))
 
 const sizes = meta.sizes
-const fmts = ['BC1', 'BC5', 'BC7', 'ASTC4x4', 'ETC2']
-const fmtLabel = f => (f === 'ASTC4x4' ? 'ASTC' : f)
+// Results without a format (an older run) leave its column out.
+const fmts = ['BC1', 'BC4', 'BC5', 'BC7', 'ASTC4x4', 'ETC2', 'EAC_R11'].filter(f => runs.some(r => r.format === f))
+const fmtLabel = f => (f === 'ASTC4x4' ? 'ASTC' : f === 'EAC_R11' ? 'EAC R11' : f)
 const run = (format, lib, source, variant, size) =>
   runs.find(r => r.format === format && r.library === lib && r.source === source && r.variant === variant && r.size === size)
 
 // gputex always encodes RGBA; the headline pairing is gputex vs spark's matched
 // variant. gputex/spark use the same variant key per format here.
-const gvar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' }
-const svar = { BC1: 'rgb', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb' }
+const gvar = { BC1: 'rgb', BC4: 'r', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb', EAC_R11: 'r' }
+const svar = { BC1: 'rgb', BC4: 'r', BC5: 'rg', BC7: 'rgba', ASTC4x4: 'rgba', ETC2: 'rgb', EAC_R11: 'r' }
 
 const G = '🟢', S = '⚡️' // winner emojis: gputex / spark
 const EVEN = '⚪️ even' // within TIE of each other
@@ -71,7 +72,7 @@ const dispName = t => {
   const n = t.name === ALPHA ? 'alpha card' : t.name
   return /\b\d+K\b/.test(n) ? n : `${n.replace(/ \d+$/, '')} ${sizeLabel(t.size)}`
 }
-const alphaNA = (t, f) => t.name === ALPHA && (f === 'BC1' || f === 'BC5' || f === 'ETC2')
+const alphaNA = (t, f) => t.name === ALPHA && ['BC1', 'BC4', 'BC5', 'ETC2', 'EAC_R11'].includes(f)
 
 // ===================== SUMMARY (aggregate matrix) ====================== //
 // One cell per (format, metric): the MEDIAN result across the 34 real textures,

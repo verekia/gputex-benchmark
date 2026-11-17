@@ -174,6 +174,28 @@ try {
 }
 
 const OUT = process.env.OUT || 'results.json' // OUT=… writes elsewhere (e.g. a scratch run)
+
+// MERGE=1 with FORMAT=…: replace only the measured formats' rows in the
+// existing OUT file and keep every other format's rows as they are — for
+// adding a format, or reporting one format's shader update, without
+// re-measuring the rest. The previous run's meta is kept under meta.mergedFrom.
+if (process.env.MERGE === '1') {
+  if (!process.env.FORMAT) { console.error('MERGE=1 needs FORMAT=…'); server.close(); process.exit(1) }
+  const formats = new Set(results.runs.map(r => r.format).concat(results.quality?.metrics?.map(m => m.format) ?? []))
+  const prev = JSON.parse(await readFile(resolve(ROOT, OUT), 'utf8'))
+  const keep = r => !formats.has(r.format)
+  results.runs = [...prev.runs.filter(keep), ...results.runs]
+  if (prev.quality && results.quality) {
+    const names = new Set(results.quality.sources.map(s => s.name))
+    results.quality = {
+      ...results.quality,
+      sources: [...results.quality.sources, ...prev.quality.sources.filter(s => !names.has(s.name))],
+      metrics: [...prev.quality.metrics.filter(keep), ...results.quality.metrics],
+    }
+  }
+  results.meta = { ...results.meta, sizes: prev.meta.sizes, mergedFormats: [...formats], mergedFrom: { ...prev.meta, mergedFrom: undefined } }
+  console.log(`merging ${[...formats].join(', ')} into ${OUT} (other formats kept from the previous run)`)
+}
 await writeFile(resolve(ROOT, OUT), JSON.stringify(results, null, 2))
 console.log(`\nwrote ${OUT} —`, results.runs.length, 'speed rows' + (RUNS > 1 ? `, aggregated over ${RUNS} runs` : ''))
 server.close()

@@ -9,17 +9,19 @@ To run the benchmark, place these files here (from
 
 ```
 spark_bc1_rgb.wgsl
+spark_bc4_r.wgsl
 spark_bc5_rg.wgsl
 spark_bc7_rgb.wgsl
 spark_bc7_rgba.wgsl
 spark_astc_rgb.wgsl
 spark_astc_rgba.wgsl
 spark_etc2_rgb.wgsl
+spark_eac_r.wgsl
 ```
 
 e.g.:
 
 ```sh
 git clone --depth 1 https://github.com/Ludicon/spark.js /tmp/spark
-cp /tmp/spark/src/shaders/spark_{bc1_rgb,bc5_rg,bc7_rgb,bc7_rgba,astc_rgb,astc_rgba,etc2_rgb}.wgsl .
+cp /tmp/spark/src/shaders/spark_{bc1_rgb,bc4_r,bc5_rg,bc7_rgb,bc7_rgba,astc_rgb,astc_rgba,etc2_rgb,eac_r}.wgsl .
 ```

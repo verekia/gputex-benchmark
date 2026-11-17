@@ -1674,6 +1674,7 @@ var A3 = MODIFIERS.map((m) => 3 * m[0]);
 var B3 = MODIFIERS.map((m) => 3 * m[1]);
 var THR3 = MODIFIERS.map((m) => 1.5 * (m[0] + m[1]));
 var PLANAR_FUDGE = 8;
+var KAPPA = 0.9;
 function fastTableScore(D, t) {
   let acc = 0;
   for (let i = 0;i < D.length; i++) {
@@ -1717,10 +1718,13 @@ function encodeFastBlock(px) {
   ];
   const qsq = [0, 0, 0, 0];
   const qlsq = [0, 0, 0, 0];
+  let gray = true;
   for (let k = 0;k < 16; k++) {
     const r = px[k * 3];
     const g = px[k * 3 + 1];
     const b = px[k * 3 + 2];
+    if (r !== g || g !== b)
+      gray = false;
     const l = r + g + b;
     luma[k] = l;
     const q = ((k & 3) >= 2 ? 1 : 0) | (k >> 2 >= 2 ? 2 : 0);
@@ -1765,13 +1769,13 @@ function encodeFastBlock(px) {
   const residual = (s) => {
     const dotSum = s.sum[0] * s.sum[0] + s.sum[1] * s.sum[1] + s.sum[2] * s.sum[2];
     const lsum = s.sum[0] + s.sum[1] + s.sum[2];
-    return s.sq - dotSum / 8 - (s.lsq - lsum * lsum / 8) / 3;
+    return s.sq - dotSum / 8 - KAPPA * (s.lsq - lsum * lsum / 8) / 3;
   };
   const resA = residual(pair(0, 2)) + residual(pair(1, 3));
   const resB = residual(pair(0, 1)) + residual(pair(2, 3));
   let flip;
   let cur;
-  if (Math.abs(resA - resB) < 1) {
+  if (gray) {
     const fa = evalFlip(0, pair(0, 2), pair(1, 3));
     const fb = evalFlip(1, pair(0, 1), pair(2, 3));
     flip = fb.est < fa.est ? 1 : 0;
@@ -1972,6 +1976,241 @@ function decodeETC2Block(block) {
   }
   return out;
 }
+// gputex/library/src/eac_r11_ref.ts
+var MODIFIERS2 = [
+  [-3, -6, -9, -15, 2, 5, 8, 14],
+  [-3, -7, -10, -13, 2, 6, 9, 12],
+  [-2, -5, -8, -13, 1, 4, 7, 12],
+  [-2, -4, -6, -13, 1, 3, 5, 12],
+  [-3, -6, -8, -12, 2, 5, 7, 11],
+  [-3, -7, -9, -11, 2, 6, 8, 10],
+  [-4, -7, -8, -11, 3, 6, 7, 10],
+  [-3, -5, -8, -11, 2, 4, 7, 10],
+  [-2, -6, -8, -10, 1, 5, 7, 9],
+  [-2, -5, -8, -10, 1, 4, 7, 9],
+  [-2, -4, -8, -10, 1, 3, 7, 9],
+  [-2, -5, -7, -10, 1, 4, 6, 9],
+  [-3, -4, -7, -10, 2, 3, 6, 9],
+  [-1, -2, -3, -10, 0, 1, 2, 9],
+  [-4, -6, -8, -9, 3, 5, 7, 8],
+  [-3, -5, -7, -9, 2, 4, 6, 8]
+];
+var CANDIDATES = [
+  4134,
+  150061,
+  177000,
+  136032,
+  145421,
+  145421,
+  51021,
+  118989,
+  70685,
+  62173,
+  45277,
+  45277,
+  41475,
+  13259,
+  41931,
+  5067,
+  58315,
+  62345,
+  54153,
+  53961,
+  45705,
+  25159,
+  21063,
+  28929,
+  16513,
+  8385,
+  12417,
+  12417,
+  8193,
+  61504,
+  33728,
+  61952,
+  16975,
+  61577,
+  583,
+  21060,
+  41026,
+  8641,
+  905,
+  57925,
+  75419
+];
+function clampInt(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function decode11(base, multiplier, table, index) {
+  const m = MODIFIERS2[table][index];
+  return clampInt(base * 8 + 4 + (multiplier ? m * multiplier * 8 : m), 0, 2047);
+}
+function spanBucket(s8) {
+  if (s8 === 255)
+    return 40;
+  if (s8 < 32)
+    return s8;
+  return 32 + (s8 >> 2 + (s8 >= 64 ? 1 : 0) + (s8 >= 128 ? 1 : 0) & 7);
+}
+function scoreCandidate(targets, table, multiplier, base, indices) {
+  const halfM2 = multiplier ? 8 * multiplier : 1;
+  const centre2 = 16 * base + 8 - halfM2;
+  const limitPos = 2 * 2047 - centre2;
+  const limitNeg = centre2;
+  const mods = MODIFIERS2[table];
+  let err = 0;
+  for (let p = 0;p < 16; p++) {
+    const d = 2 * targets[p] - centre2;
+    const a = Math.abs(d);
+    let best = Infinity;
+    let bestI = 0;
+    for (let i = 0;i < 4; i++) {
+      let m = (2 * mods[4 + i] + 1) * halfM2;
+      if (i === 3)
+        m = Math.min(m, d >= 0 ? limitPos : limitNeg);
+      const r = Math.abs(a - m);
+      if (r < best) {
+        best = r;
+        bestI = i;
+      }
+    }
+    err += best * best;
+    if (indices)
+      indices[p] = (d >= 0 ? 4 : 0) + bestI;
+  }
+  return err;
+}
+function exactError(targets, table, multiplier, base, limit) {
+  let err = 0;
+  for (let p = 0;p < 16 && err < limit; p++) {
+    let best = Infinity;
+    for (let i = 0;i < 8; i++) {
+      const d = decode11(base, multiplier, table, i) - targets[p];
+      if (d * d < best)
+        best = d * d;
+    }
+    err += best;
+  }
+  return err;
+}
+function searchFast(targets, tmin, tmax) {
+  const h2 = tmax - tmin;
+  const mid2 = tmin + tmax;
+  const s8 = Math.floor(tmax * 255 / 2047 + 0.5) - Math.floor(tmin * 255 / 2047 + 0.5);
+  const lut = CANDIDATES[spanBucket(s8)];
+  let best = Infinity;
+  let choice = { table: 0, multiplier: 0, base: 0 };
+  let winner = choice;
+  for (let k = 0;k < 5; k++) {
+    let table;
+    let multiplier;
+    let base;
+    if (k < 3) {
+      const c = lut >> 6 * k & 63;
+      table = c & 15;
+      const rule = c >> 4;
+      const divisor = 8 * (2 * MODIFIERS2[table][7] + 1);
+      multiplier = clampInt(Math.floor((h2 + divisor / 2) / divisor), 1, 15);
+      if (rule === 1)
+        multiplier = Math.min(multiplier + 1, 15);
+      if (rule === 2)
+        multiplier = 0;
+      base = Math.min(mid2 + (multiplier ? 8 * multiplier : 1) >> 4, 255);
+    } else {
+      if (k === 3)
+        winner = choice;
+      table = winner.table;
+      multiplier = winner.multiplier;
+      base = k === 3 ? Math.max(winner.base, 1) - 1 : Math.min(winner.base + 1, 255);
+    }
+    const e = scoreCandidate(targets, table, multiplier, base);
+    if (e < best) {
+      best = e;
+      choice = { table, multiplier, base };
+    }
+  }
+  return choice;
+}
+function searchHigh(targets, tmin, tmax) {
+  let choice = searchFast(targets, tmin, tmax);
+  let best = exactError(targets, choice.table, choice.multiplier, choice.base, Infinity);
+  const mid = (tmin + tmax) / 2;
+  for (let table = 0;table < 16; table++) {
+    for (let multiplier = 0;multiplier < 16; multiplier++) {
+      const step = multiplier ? multiplier * 8 : 1;
+      const b0 = Math.floor((mid - 4 + step / 2) / 8 + 0.5);
+      const window = 3 + multiplier;
+      for (let base = Math.max(0, b0 - window);base <= Math.min(255, b0 + window); base++) {
+        const e = exactError(targets, table, multiplier, base, best);
+        if (e < best) {
+          best = e;
+          choice = { table, multiplier, base };
+        }
+      }
+    }
+  }
+  return choice;
+}
+function encodeEACR11Block(values, { quality = "fast" } = {}) {
+  if (values.length !== 16) {
+    throw new Error(`encodeEACR11Block: expected 16 values, got ${values.length}`);
+  }
+  const targets = new Int32Array(16);
+  let tmin = 2047;
+  let tmax = 0;
+  for (let x = 0;x < 4; x++) {
+    for (let y = 0;y < 4; y++) {
+      const t = clampInt(Math.floor(values[y * 4 + x] * 2047 + 0.5), 0, 2047);
+      targets[x * 4 + y] = t;
+      if (t < tmin)
+        tmin = t;
+      if (t > tmax)
+        tmax = t;
+    }
+  }
+  const { table, multiplier, base } = quality === "high" ? searchHigh(targets, tmin, tmax) : searchFast(targets, tmin, tmax);
+  const indices = new Uint8Array(16);
+  if (quality === "high") {
+    for (let p = 0;p < 16; p++) {
+      let best = Infinity;
+      for (let i = 0;i < 8; i++) {
+        const d = Math.abs(decode11(base, multiplier, table, i) - targets[p]);
+        if (d < best) {
+          best = d;
+          indices[p] = i;
+        }
+      }
+    }
+  } else {
+    scoreCandidate(targets, table, multiplier, base, indices);
+  }
+  const out = new Uint8Array(8);
+  out[0] = base;
+  out[1] = multiplier << 4 | table;
+  let bits = 0n;
+  for (let p = 0;p < 16; p++)
+    bits |= BigInt(indices[p]) << BigInt(45 - 3 * p);
+  for (let i = 0;i < 6; i++)
+    out[2 + i] = Number(bits >> BigInt(40 - 8 * i) & 0xffn);
+  return out;
+}
+function decodeEACR11Block(block) {
+  if (block.length !== 8) {
+    throw new Error(`decodeEACR11Block: expected 8 bytes, got ${block.length}`);
+  }
+  const base = block[0];
+  const multiplier = block[1] >> 4;
+  const table = block[1] & 15;
+  let bits = 0n;
+  for (let i = 0;i < 6; i++)
+    bits |= BigInt(block[2 + i]) << BigInt(40 - 8 * i);
+  const out = new Float32Array(16);
+  for (let p = 0;p < 16; p++) {
+    const index = Number(bits >> BigInt(45 - 3 * p) & 7n);
+    out[(p & 3) * 4 + (p >> 2)] = decode11(base, multiplier, table, index) / 2047;
+  }
+  return out;
+}
 export {
   decodeASTC4x4Block,
   decodeBC1Block,
@@ -1981,6 +2220,7 @@ export {
   decodeBC7Mode1Block,
   decodeBC7Mode4Block,
   decodeBC7Mode6Block,
+  decodeEACR11Block,
   decodeETC2Block,
   encodeASTC4x4Block,
   encodeBC1Block,
@@ -1988,6 +2228,7 @@ export {
   encodeBC5Block,
   encodeBC7Block,
   encodeBC7Mode6Block,
+  encodeEACR11Block,
   encodeETC2Block,
   readBC7Mode,
   readETC2Mode

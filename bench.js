@@ -20,7 +20,7 @@
 // where the format is standard (BC1, BC5) so the PSNR comparison uses one
 // decoder per format instead of hand-rolled ones.
 
-import { decodeBC1Block, decodeBC5Block, decodeBC7Block, decodeASTC4x4Block, decodeETC2Block } from './refcodec.js'
+import { decodeBC1Block, decodeBC4Block, decodeBC5Block, decodeBC7Block, decodeASTC4x4Block, decodeETC2Block, decodeEACR11Block } from './refcodec.js'
 import { decodeBC7Full, bc7SupportedMode } from './bc7full.js'
 
 const SIZES = [256, 512, 1024, 2048, 4096]
@@ -52,6 +52,16 @@ const FORMATS = [
     entries: [
       { lib: 'gputex', variant: 'rgb',  file: 'shaders/gputex/bc1_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
       { lib: 'spark',  variant: 'rgb',  file: 'shaders/spark/spark_bc1_rgb.wgsl', entry: 'main',   wg: [16, 8], bind: 'spark' },
+    ],
+  },
+  {
+    // BC4 (RGTC1, 8 bytes/block): one channel, R. The library feeds gputex an
+    // r8unorm source; here both libraries read the same rgba8 one.
+    key: 'BC4',
+    bytesPerBlock: 8,
+    entries: [
+      { lib: 'gputex', variant: 'r', file: 'shaders/gputex/bc4_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
+      { lib: 'spark',  variant: 'r', file: 'shaders/spark/spark_bc4_r.wgsl',   entry: 'main',   wg: [16, 8], bind: 'spark' },
     ],
   },
   {
@@ -93,6 +103,18 @@ const FORMATS = [
       { lib: 'spark',  variant: 'rgb', file: 'shaders/spark/spark_etc2_rgb.wgsl',  entry: 'main',  wg: [16, 8], bind: 'spark' },
     ],
   },
+  {
+    // EAC R11 unsigned (8 bytes/block): one channel, R — the ETC2-family
+    // analogue of BC4. Big-endian blocks decoded by gputex's reference
+    // decoder (decodeEACR11Block). The library feeds gputex an r8unorm
+    // source; here both libraries read the same rgba8 one.
+    key: 'EAC_R11',
+    bytesPerBlock: 8,
+    entries: [
+      { lib: 'gputex', variant: 'r', file: 'shaders/gputex/eac_r11_fast_f16.wgsl', entry: 'encode', wg: [8, 8],  bind: 'gputex' },
+      { lib: 'spark',  variant: 'r', file: 'shaders/spark/spark_eac_r.wgsl',       entry: 'main',   wg: [16, 8], bind: 'spark' },
+    ],
+  },
 ]
 
 // Optional format filter for fast iteration when a change is contained to one
@@ -102,7 +124,8 @@ const QS = new URLSearchParams(location.search)
 const FORMAT_FILTER = (QS.get('format') || '')
   .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 const inFilter = key => FORMAT_FILTER.length === 0 ||
-  FORMAT_FILTER.includes(key.toUpperCase()) || (key === 'ASTC4x4' && FORMAT_FILTER.includes('ASTC'))
+  FORMAT_FILTER.includes(key.toUpperCase()) || (key === 'ASTC4x4' && FORMAT_FILTER.includes('ASTC')) ||
+  (key === 'EAC_R11' && FORMAT_FILTER.includes('EAC'))
 const ACTIVE_FORMATS = FORMATS.filter(f => inFilter(f.key))
 // ?quality=0 skips the (deterministic, CPU-heavy) quality pass — run.mjs sets it
 // on the repeat runs of a RUNS=n aggregate, which only need timings.
@@ -118,6 +141,8 @@ const PREV_FILES = new Set((QS.get('prevfiles') || '').split(',').filter(Boolean
 if (QS.get('prev') === '1') {
   for (const fmt of FORMATS) {
     const g = fmt.entries.find(e => e.lib === 'gputex')
+    // A format the baseline has no shader for (added since) runs without one.
+    if (!PREV_FILES.has(g.file.replace('shaders/gputex/', 'shaders/gputex-prev/'))) continue
     // (A baseline without an opaque-source kernel runs its general one everywhere.)
     const prevOpaque = g.opaqueFile && g.opaqueFile.replace('shaders/gputex/', 'shaders/gputex-prev/')
     fmt.entries.splice(1, 0, { ...g, lib: 'gputex-prev', file: g.file.replace('shaders/gputex/', 'shaders/gputex-prev/'), opaqueFile: PREV_FILES.has(prevOpaque) ? prevOpaque : undefined })
@@ -259,7 +284,7 @@ async function runBench() {
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
   if (!adapter) throw new Error('No WebGPU adapter')
 
-  const want = ['timestamp-query', 'shader-f16', 'texture-compression-astc', 'texture-compression-bc']
+  const want = ['timestamp-query', 'shader-f16', 'texture-compression-astc', 'texture-compression-bc', 'texture-compression-etc2']
   const features = want.filter(f => adapter.features.has(f))
   if (!features.includes('timestamp-query')) {
     throw new Error('timestamp-query feature not available — cannot measure GPU time')
@@ -585,6 +610,8 @@ const REF_DECODE = {
   BC7REF: b => ({ values: decodeBC7Block(b), channels: 4 }),
   ASTC4x4: b => ({ values: decodeASTC4x4Block(b), channels: 4 }),
   ETC2: b => ({ values: decodeETC2Block(b), channels: 3 }), // RGB8, decodes both libraries
+  BC4: b => ({ values: decodeBC4Block(b), channels: 1 }), // standard, decodes both libraries
+  EAC_R11: b => ({ values: decodeEACR11Block(b), channels: 1 }), // standard, decodes both libraries
 }
 
 // PSNR (dB) of compressed `bytes` against the source RGBA byte array `ref`,
@@ -610,7 +637,7 @@ function psnrRef(bytes, ref, size, bpb, decode, srcChannels) {
 }
 
 // Checks a reference decoder against the hardware decode of the same blocks
-// (`hw`: RGBA8, as decodeASTC4x4GPU returns), value by value, with the
+// (`hw`: RGBA8, as decodeGPU returns), value by value, with the
 // reference output rounded to 8 bits the same way. The M3's decode lands 1 LSB
 // off round-to-nearest on a few % of values (its conversion is neither the top
 // byte of the 16-bit result nor an fp16 round trip — both tested, both worse),
@@ -647,10 +674,12 @@ function bc7ModeHistogram(bytes) {
   return h // index 0..7 = mode, 8 = invalid (byte0===0)
 }
 
-async function decodeASTC4x4GPU(device, bytes, size) {
+// Hardware decode of compressed blocks to RGBA8: upload them as a texture of
+// `format` and sample every texel with a nearest sampler.
+async function decodeGPU(device, bytes, size, format = 'astc-4x4-unorm', bytesPerBlock = 16) {
   const blocksX = size >> 2
-  const tex = device.createTexture({ size: [size, size, 1], format: 'astc-4x4-unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
-  device.queue.writeTexture({ texture: tex }, bytes, { bytesPerRow: blocksX * 16, rowsPerImage: size >> 2 }, { width: size, height: size })
+  const tex = device.createTexture({ size: [size, size, 1], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
+  device.queue.writeTexture({ texture: tex }, bytes, { bytesPerRow: blocksX * bytesPerBlock, rowsPerImage: size >> 2 }, { width: size, height: size })
   const nearest = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' })
   const code = `
     @group(0) @binding(0) var t: texture_2d<f32>;
@@ -717,7 +746,7 @@ function distinctBlocks(bytes, bpb) {
 
 // Channels each format actually stores (scored for PSNR). BC7/ASTC also carry
 // alpha, reported separately.
-const PSNR_CHANNELS = { BC1: [0, 1, 2], BC5: [0, 1], BC7: [0, 1, 2], ASTC4x4: [0, 1, 2], ETC2: [0, 1, 2] }
+const PSNR_CHANNELS = { BC1: [0, 1, 2], BC4: [0], BC5: [0, 1], BC7: [0, 1, 2], ASTC4x4: [0, 1, 2], ETC2: [0, 1, 2], EAC_R11: [0] }
 
 // Load a PNG as a square RGBA source. We read back the exact pixels we upload
 // (same canvas → getImageData for the PSNR reference, copyExternalImageToTexture
@@ -738,7 +767,7 @@ async function loadImageSource(url, name) {
 }
 
 // Encode + score every entry against one source image; returns metric records.
-async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
+async function qualityForSource({ device, sampler, loadShader, hasASTC, features, src }) {
   const { size, canvas, pixels: ref } = src
   const srcTex = device.createTexture({
     size: [size, size, 1], format: 'rgba8unorm',
@@ -763,7 +792,25 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
           distinctBlocks: distinctBlocks(bytes, bpb), psnr: null, psnrChannels: null, decoder: null,
         }
 
-        if (fmt.key === 'BC1' || fmt.key === 'BC5' || fmt.key === 'ETC2') {
+        if (fmt.key === 'BC4' || fmt.key === 'EAC_R11') {
+          // Standard one-channel formats: gputex's reference decoder scores both
+          // libraries. Cross-check: it must agree with the hardware decode of the
+          // same blocks — for BOTH libraries, since it is the one doing the scoring.
+          rec.psnr = psnrRef(bytes, ref, size, bpb, REF_DECODE[fmt.key], sc)
+          rec.psnrChannels = 'R'
+          rec.decoder = 'gputex-ref'
+          const hwFormat = fmt.key === 'BC4' ? 'bc4-r-unorm' : 'eac-r11unorm'
+          if (features.includes(fmt.key === 'BC4' ? 'texture-compression-bc' : 'texture-compression-etc2')) {
+            try {
+              const hw = await decodeGPU(device, bytes, size, hwFormat, bpb)
+              Object.assign(rec, refVsHardware(bytes, hw, size, bpb, REF_DECODE[fmt.key]))
+              // The same score from the hardware decode: the M3 decodes BC4 up to
+              // 2 LSB off the exact-float reference, so check the ranking holds.
+              rec.psnrHw = psnr(ref, hw, size, sc)
+              if (rec.refBad) log(`  ${fmt.key} REF≠HARDWARE: ${tag} on ${src.name} — ${rec.refBad} values off by >1 LSB (max ${rec.refMaxDiff})`)
+            } catch (err) { rec.refError = String(err.message || err) }
+          }
+        } else if (fmt.key === 'BC1' || fmt.key === 'BC5' || fmt.key === 'ETC2') {
           // Standard formats — gputex's reference decoder decodes both libraries.
           rec.psnr = psnrRef(bytes, ref, size, bpb, REF_DECODE[fmt.key], sc)
           rec.psnrChannels = fmt.key === 'BC5' ? 'RG' : 'RGB'
@@ -791,7 +838,7 @@ async function qualityForSource({ device, sampler, loadShader, hasASTC, src }) {
           if (hasASTC) {
             // Native hardware decode: valid for any conforming ASTC block and
             // symmetric across libraries — the fair head-to-head metric.
-            const hw = await decodeASTC4x4GPU(device, bytes, size)
+            const hw = await decodeGPU(device, bytes, size)
             rec.psnr = psnr(ref, hw, size, sc)
             rec.psnrChannels = 'RGB'
             rec.decoder = 'gpu-hardware'
@@ -837,7 +884,7 @@ async function runQuality({ device, sampler, loadShader, features, manifest }) {
     catch (err) { log(`  (skipping quality source ${job.name}: ${err.message})`); continue }
     sizes[src.name] = src.size
     log(`\n=== quality @ ${src.size}² — source: ${src.name} ===`)
-    metrics.push(...await qualityForSource({ device, sampler, loadShader, hasASTC, src }))
+    metrics.push(...await qualityForSource({ device, sampler, loadShader, hasASTC, features, src }))
   }
   const sources = [...new Set(metrics.map(m => m.source))].map(name => ({ name, size: sizes[name] }))
   return { size: QSIZE, sources: sources.map(s => ({ name: s.name, size: s.size })), metrics }
